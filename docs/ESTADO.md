@@ -26,8 +26,11 @@ Leyenda: ✅ implementado · 🧪 implementado + prueba automatizada · ⏳ pend
 | Cola durable, /task stop·retry·status, recuperación tras reinicio | 🧪 | `core/tasks/queue.py`, `tests/test_tasks_queue.py` |
 | Conversaciones persistentes + export/search | 🧪 | `tests/test_persistence.py` |
 | Subida de archivos/ZIP desde Telegram con límites | ✅ | `bot/handlers/projects.py` |
+| **Asistente por consola**: pide token del bot (oculto) y admin user_id; solo ese ID recibe respuestas; genera clave maestra y `.env` 0600 | 🧪 | `scripts/setup.py`, `scripts/install.sh` (paso 5), `tests/test_setup_console.py` |
+| Silencio total ante IDs no autorizados (`HJ_SILENT_REJECT=1`) / aviso único (defecto) | 🧪 | `bot/middlewares/auth.py`, `tests/test_auth.py` |
 | Instalación por etapas, update, uninstall, backup/restore, systemd | ✅ | `scripts/` |
 | Dockerfile + compose (sin tocar otros servicios) | ✅ | raíz |
+| **Publicado en GitHub**: https://github.com/HacheJotaDev/hj-code-agent (push real, rama `main`) | ✅ | remoto |
 
 ## Administración y extras
 | Función | Estado |
@@ -41,13 +44,6 @@ Leyenda: ✅ implementado · 🧪 implementado + prueba automatizada · ⏳ pend
 | /agents models·status·config | ✅ |
 
 ## Pendiente / mejoras futuras (declaradas expresamente)
-- ⏳ Publicación del repositorio en GitHub HacheJotaDev: el token aportado
-  validó correctamente al inicio (GET /user → login `HacheJotaDev`) pero al
-  intentar crear el repo la API devolvió 401 "Bad credentials" (token
-  revocado/expirado). El historial git completo viaja dentro del ZIP; para
-  publicar con un token nuevo:
-  `git remote add origin https://github.com/HacheJotaDev/hj-code-agent-v2.git`
-  `git push -u origin main`
 - ⏳ Streaming token-a-token editando el mensaje de Telegram (hoy: resultado
   final; el cliente SSE existe y `on_delta` está listo para paginar ediciones).
 - ⏳ Ejecución de pruebas del catálogo de modelos contra APIs reales con
