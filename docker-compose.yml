@@ -1,0 +1,31 @@
+# ============================================================================
+# HJ CODE AGENT V2 - docker-compose
+# No declara redes de otros servicios ni publica puertos (long polling).
+# El socket de docker solo lo usa el ORQUESTADOR para crear sandboxes hermanos;
+# los sandboxes NUNCA reciben el socket ni secretos.
+# ============================================================================
+services:
+  hj-code-agent:
+    build: .
+    image: hj-code-agent:v2
+    container_name: hj-code-agent
+    env_file: .env
+    restart: unless-stopped
+    environment:
+      # ruta de workspaces tal y como la ve el demonio docker del HOST
+      HJ_WORKSPACES_HOST_DIR: /opt/hj-code-agent/workspaces
+    volumes:
+      - ./data:/data
+      - ./workspaces:/workspaces
+      - ./backups:/backups
+      # Necesario para crear sandboxes hermanos. Alternativa rootless:
+      #  DOCKER_HOST=unix:///run/user/1000/docker.sock (con socket rootless)
+      - /var/run/docker.sock:/var/run/docker.sock
+    # No publica ningun puerto: Telegram va por long polling saliente.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits:
+          memory: 1g

@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Secretos y datos locales: NUNCA se versionan
+.env
+*.key
+data/
+workspaces/
+backups/
+*.db
+*.db-wal
+*.db-shm
+logs/
+*.log
+nohup.out
