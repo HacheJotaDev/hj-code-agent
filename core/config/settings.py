@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = Field(default="", validation_alias="HJ_TELEGRAM_BOT_TOKEN")
     admin_user_ids: list[int] = Field(default_factory=list, validation_alias="HJ_ADMIN_USER_IDS")
+    # 1 = ni un aviso a IDs no autorizados (silencio total);
+    # 0 = un unico aviso con su user_id y luego silencio.
+    silent_reject: bool = Field(default=False, validation_alias="HJ_SILENT_REJECT")
 
     # Rutas
     data_dir: Path = Field(default=Path("/opt/hj-code-agent/data"), validation_alias="HJ_DATA_DIR")
@@ -84,7 +87,7 @@ class Settings(BaseSettings):
             return [int(x.strip()) for x in v.replace(";", ",").split(",") if x.strip()]
         return list(v)
 
-    @field_validator("sandbox_network", mode="before")
+    @field_validator("sandbox_network", "silent_reject", mode="before")
     @classmethod
     def _parse_bool(cls, v):
         return _to_bool(v)

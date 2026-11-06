@@ -20,15 +20,20 @@ class AuthMiddleware(BaseMiddleware):
         auth = ctx.auth
         await auth.register(user.id, user.username or "", user.first_name or "")
         if not await auth.is_allowed(user.id):
-            # Un unico aviso; el resto de mensajes se ignoran silenciosamente
+            # Comportamiento configurable:
+            #   silent_reject=0 (defecto): UN solo aviso con su user_id; luego silencio.
+            #   silent_reject=1: ni un aviso - el bot no responde a nadie no autorizado.
             log.info("Acceso denegado a user_id=%s", user.id)
             data["allowed"] = False
-            try:
-                await ctx.bot.send_message(
-                    user.id, "⛔ Acceso restringido.\nSolicita autorizacion al administrador "
-                             f"con tu user_id: <code>{user.id}</code>", parse_mode="HTML")
-            except Exception:
-                pass
+            settings = getattr(ctx, "settings", None)
+            silent = bool(getattr(settings, "silent_reject", False))
+            if not silent:
+                try:
+                    await ctx.bot.send_message(
+                        user.id, "⛔ Acceso restringido.\nSolicita autorizacion al administrador "
+                                 f"con tu user_id: <code>{user.id}</code>", parse_mode="HTML")
+                except Exception:
+                    pass
             return  # no llama al handler
         data["allowed"] = True
         data["is_admin"] = await auth.is_admin(user.id)

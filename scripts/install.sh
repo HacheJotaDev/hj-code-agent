@@ -39,21 +39,32 @@ python3 -m venv "$BASE_DIR/venv"
 "$BASE_DIR/venv/bin/pip" install -e "$BASE_DIR/app" --quiet
 ok "Dependencias instaladas"
 
-step "5/7 Configuracion (.env)"
+step "5/7 Configuracion (.env) - asistente por consola"
 if [ ! -f "$BASE_DIR/app/.env" ]; then
-  cp "$BASE_DIR/app/.env.example" "$BASE_DIR/app/.env"
-  KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
-  sed -i "s|^HJ_MASTER_KEY=.*|HJ_MASTER_KEY=$KEY|" "$BASE_DIR/app/.env"
-  sed -i "s|^HJ_MASTER_KEY_FILE=.*|HJ_MASTER_KEY_FILE=|" "$BASE_DIR/app/.env"
-  cat <<EOF
+  if [ -t 0 ]; then
+    # Asistente interactivo: pide por consola el TOKEN DEL BOT (oculto) y
+    # el ADMIN USER_ID. Solo ese ID obtendra respuestas del bot.
+    "$BASE_DIR/venv/bin/python" "$BASE_DIR/app/scripts/setup.py" \
+        --env "$BASE_DIR/app/.env" --base-dir "$BASE_DIR" \
+    && ok "Configuracion por consola completada (.env 0600)" \
+    || die "El asistente de configuracion fallo; crea $BASE_DIR/app/.env a mano desde .env.example"
+  else
+    cp "$BASE_DIR/app/.env.example" "$BASE_DIR/app/.env"
+    KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+    sed -i "s|^HJ_MASTER_KEY=.*|HJ_MASTER_KEY=$KEY|" "$BASE_DIR/app/.env"
+    sed -i "s|^HJ_MASTER_KEY_FILE=.*|HJ_MASTER_KEY_FILE=|" "$BASE_DIR/app/.env"
+    cat <<EOF
 
-  ACCION REQUERIDA: edita $BASE_DIR/app/.env y rellena:
+  INSTALACION NO INTERACTIVA: edita $BASE_DIR/app/.env y rellena:
     HJ_TELEGRAM_BOT_TOKEN=  (token de @BotFather)
     HJ_ADMIN_USER_IDS=      (tu user_id de Telegram, de @userinfobot)
+  o ejecuta el asistente por consola:
+    sudo $BASE_DIR/venv/bin/python $BASE_DIR/app/scripts/setup.py --env $BASE_DIR/app/.env --base-dir $BASE_DIR
 
   La HJ_MASTER_KEY ya se genero aleatoriamente. GUARDA UNA COPIA FUERA DEL VPS:
   si la pierdes, no podras leer las credenciales cifradas.
 EOF
+  fi
 else
   ok ".env ya existia: no se modifica"
 fi

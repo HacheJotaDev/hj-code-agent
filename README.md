@@ -39,9 +39,19 @@ cp -r hj-code-agent /opt/hj-code-agent/app  # o git clone ...
 
 cd /opt/hj-code-agent/app
 sudo bash scripts/install.sh     # etapas verificables; genera clave maestra
-nano /opt/hj-code-agent/app/.env # HJ_TELEGRAM_BOT_TOKEN y HJ_ADMIN_USER_IDS
+# (el instalador lanza el ASISTENTE POR CONSOLA si no hay .env:
+#  te pide el TOKEN DEL BOT -oculto- y tu ADMIN USER_ID de Telegram;
+#  SOLO ese user_id obtendra respuestas del bot)
 sudo systemctl start hj-code-agent
 journalctl -u hj-code-agent -f
+```
+
+Reconfigurar mas tarde (cambia token/admin por consola, sin editar archivos):
+
+```bash
+sudo /opt/hj-code-agent/venv/bin/python /opt/hj-code-agent/app/scripts/setup.py \
+     --env /opt/hj-code-agent/app/.env --base-dir /opt/hj-code-agent
+sudo systemctl restart hj-code-agent
 ```
 
 Primeros pasos en Telegram:

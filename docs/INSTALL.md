@@ -19,11 +19,31 @@ sudo bash scripts/install.sh
 ```
 
 Etapas verificables: dependencias → directorios (`/opt/hj-code-agent/{data,
-workspaces,backups}`) → código → venv + dependencias → `.env` (genera clave
-maestra aleatoria) → unidad systemd (`Restart=always`: reinicia solo tras un
+workspaces,backups}`) → código → venv + dependencias → **asistente por
+consola** → unidad systemd (`Restart=always`: reinicia solo tras un
 reinicio del VPS) → estado. **No detiene ni reinicia otros servicios.**
 
-Edita después:
+### Asistente por consola (paso 5 del instalador)
+
+Si no existe `.env`, el instalador lanza `scripts/setup.py`, que pregunta por
+consola:
+
+1. **Token del bot** (entrada oculta; lo de @BotFather).
+2. **Tu admin user_id** → solo ese ID recibirá respuestas; el resto de
+   usuarios son ignorados (con `HJ_SILENT_REJECT=1`, ni un aviso).
+3. (Opcional) API key de DeepSeek — se siembra cifrada.
+4. (Opcional) Silencio total para IDs no autorizados.
+
+Genera la `HJ_MASTER_KEY` aleatoria y escribe `.env` con permisos `0600`.
+Puedes reejecutarlo cuando quieras (guarda un `.env.bak`):
+
+```bash
+sudo /opt/hj-code-agent/venv/bin/python /opt/hj-code-agent/app/scripts/setup.py \
+     --env /opt/hj-code-agent/app/.env --base-dir /opt/hj-code-agent
+sudo systemctl restart hj-code-agent
+```
+
+Edición manual alternativa:
 
 ```bash
 sudo nano /opt/hj-code-agent/app/.env
