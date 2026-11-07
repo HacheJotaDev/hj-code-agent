@@ -29,6 +29,7 @@ class AgentContext:
     tests_run: list[str] = field(default_factory=list)
     notify: Callable[[str], Awaitable[None]] | None = None
     approvals: dict[str, Any] = field(default_factory=dict)  # canal de autorizaciones
+    exported_zip: str | None = None  # ruta del ZIP entregable (flujo V3)
 
     def touch(self, relpath: str) -> None:
         if relpath not in self.files_touched:

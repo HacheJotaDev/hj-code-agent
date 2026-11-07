@@ -16,8 +16,8 @@ from .helpers import provider_error_message
 router = Router(name="providers")
 
 
-async def show_providers(message: Message, ctx):
-    uid = message.from_user.id
+async def show_providers(message: Message, ctx, uid: int | None = None):
+    uid = uid or message.from_user.id
     active = await ctx.providers.active_name(uid)
     rows = await ctx.store.list_providers()
     creds = await ctx.store.list_credential_providers(uid)
@@ -40,7 +40,7 @@ async def cmd_provider(message: Message, ctx, command: CommandObject = None):
     sub = parts[0].lower()
     rest = parts[1] if len(parts) > 1 else ""
     if sub == "select":
-        await _select(message, ctx, rest)
+        await _select(ctx, message.from_user.id, rest, message)
     elif sub == "remove":
         await _remove(message, ctx, rest)
     elif sub == "add":
@@ -48,8 +48,8 @@ async def cmd_provider(message: Message, ctx, command: CommandObject = None):
                              "(ej: 'miollama'). /cancel para abortar.")
         return
     else:
-        await message.answer("Uso: /provider · /provider select <nombre> · "
-                             "/provider add · /provider remove <nombre>")
+        await message.answer("Uso: /provider · /provider select &lt;nombre&gt; · "
+                             "/provider add · /provider remove &lt;nombre&gt;")
 
 
 @router.message(Command("providers"))
@@ -57,10 +57,9 @@ async def cmd_providers(message: Message, ctx):
     await show_providers(message, ctx)
 
 
-async def _select(message: Message, ctx, name: str):
-    uid = message.from_user.id
+async def _select(ctx, uid: int, name: str, message: Message):
     if not name:
-        await message.answer("Uso: /provider select <nombre>")
+        await message.answer("Uso: /provider select &lt;nombre&gt;")
         return
     cfg = await ctx.store.get_provider(name)
     if not cfg:
@@ -95,7 +94,7 @@ async def cb_add(cb: CallbackQuery, ctx, state: FSMContext):
     await cb.message.answer("➕ Nombre del nuevo proveedor (una palabra, ej: 'openrouter2'):")
 
 
-@router.message(ProviderStates.waiting_name, F.text)
+@router.message(ProviderStates.waiting_name, F.text & ~F.text.startswith("/"))
 async def on_name(message: Message, ctx, state: FSMContext):
     name = message.text.strip().lower()
     if not re.fullmatch(r"[a-z0-9_-]{2,24}", name):
@@ -106,7 +105,7 @@ async def on_name(message: Message, ctx, state: FSMContext):
     await message.answer("Tipo de adaptador: openai_compat · deepseek · anthropic")
 
 
-@router.message(ProviderStates.waiting_kind, F.text)
+@router.message(ProviderStates.waiting_kind, F.text & ~F.text.startswith("/"))
 async def on_kind(message: Message, ctx, state: FSMContext):
     kind = message.text.strip().lower()
     if kind not in ("openai_compat", "deepseek", "anthropic"):
@@ -117,7 +116,7 @@ async def on_kind(message: Message, ctx, state: FSMContext):
     await message.answer("URL base del endpoint (ej: https://api.ejemplo.com/v1):")
 
 
-@router.message(ProviderStates.waiting_url, F.text)
+@router.message(ProviderStates.waiting_url, F.text & ~F.text.startswith("/"))
 async def on_url(message: Message, ctx, state: FSMContext):
     url = message.text.strip()
     if not url.startswith(("http://", "https://")):
@@ -134,7 +133,7 @@ async def on_url(message: Message, ctx, state: FSMContext):
 @router.callback_query(F.data.startswith("prov:sel:"))
 async def cb_prov_sel(cb: CallbackQuery, ctx):
     name = cb.data.split(":", 2)[2]
-    await _select(cb.message, ctx, name)
+    await _select(ctx, cb.from_user.id, name, cb.message)  # identidad del que pulsa
     await cb.answer(f"Proveedor: {name}")
 
 
@@ -146,17 +145,24 @@ async def cb_prov_rm(cb: CallbackQuery, ctx):
         await cb.message.answer("No hay proveedores personalizados que eliminar.")
         return
     names = ", ".join(p["name"] for p in rows)
-    await cb.message.answer(f"Para eliminar: /provider remove <nombre>\nPersonalizados: {names}")
+    await cb.message.answer(f"Para eliminar: /provider remove &lt;nombre&gt;\nPersonalizados: {names}")
 
 
 # ------------------------------ API keys seguras ----------------------------
 
 
 @router.message(Command("setapi"))
-async def cmd_setapi(message: Message, ctx):
+async def cmd_setapi(message: Message, ctx, command: CommandObject = None):
     """Clave via formulario temporal de un solo uso (NUNCA en mensajes normales)."""
     uid = message.from_user.id
-    provider = await ctx.providers.active_name(uid)
+    provider = (command.args or "").strip() if command and command.args else ""
+    if provider:
+        cfg = await ctx.store.get_provider(provider)
+        if not cfg:
+            await message.answer(f"Proveedor '{esc(provider)}' no existe. /providers")
+            return
+    else:
+        provider = await ctx.providers.active_name(uid)
     token = ctx.store.new_token()
     await ctx.store.kv_set(f"form:{token}",
                            {"kind": "api_key", "user_id": uid, "provider": provider},
@@ -191,8 +197,9 @@ async def cmd_testapi(message: Message, ctx):
 # --------------------------------- modelos ----------------------------------
 
 
-async def send_models(message: Message, ctx, page: int = 0, force: bool = False):
-    uid = message.from_user.id
+async def send_models(message: Message, ctx, page: int = 0, force: bool = False,
+                      uid: int | None = None):
+    uid = uid or message.from_user.id
     try:
         provider = await ctx.providers.get(uid)
         models = await ctx.catalog.list(provider, force=force)
@@ -206,10 +213,10 @@ async def send_models(message: Message, ctx, page: int = 0, force: bool = False)
     active = await ctx.store.get_pref(uid, f"model:{provider.name}")
     text = [f"<b>📦 Modelos de {esc(provider.name)}</b> ({len(ids)})",
             f"Activo: <b>{esc(active or '(ninguno)')}</b>", ""]
-    for m in models[page * 8:(page + 1) * 8]:
+    for i, m in enumerate(models[page * 8:(page + 1) * 8], start=page * 8):
         cw = f" · ctx {m.context_window // 1000}k" if m.context_window else ""
         text.append(f"• {esc(m.id)}{cw}")
-    text.append("\nSelecciona con los botones o /model select <nombre>")
+    text.append("\nSelecciona con los botones o /model select &lt;nombre&gt;")
     await message.answer("\n".join(text), reply_markup=models_kb(ids, page))
 
 
@@ -227,21 +234,20 @@ async def cmd_model(message: Message, ctx, command: CommandObject = None):
     if not arg:
         model = await ctx.store.get_pref(uid, f"model:{pname}") or "(ninguno)"
         await message.answer(f"🧠 Proveedor: <b>{esc(pname)}</b>\n📦 Modelo activo: "
-                             f"<b>{esc(model)}</b>\n\n/model select <nombre> · /model info")
+                             f"<b>{esc(model)}</b>\n\n/model select &lt;nombre&gt; · /model info")
         return
     sub, _, rest = arg.partition(" ")
     if sub == "select":
-        await _model_select(message, ctx, rest.strip())
+        await _model_select(ctx, uid, rest.strip(), message)
     elif sub == "info":
         await _model_info(message, ctx)
     else:
-        await _model_select(message, ctx, arg)
+        await _model_select(ctx, uid, arg, message)
 
 
-async def _model_select(message: Message, ctx, model: str):
-    uid = message.from_user.id
+async def _model_select(ctx, uid: int, model: str, message: Message):
     if not model:
-        await message.answer("Uso: /model select <nombre exacto>")
+        await message.answer("Uso: /model select &lt;nombre exacto&gt;")
         return
     try:
         provider = await ctx.providers.get(uid)
@@ -288,28 +294,36 @@ async def _model_info(message: Message, ctx):
         lines.append(f"Tarifa: in {rate['input_per_mtok']} / out {rate['output_per_mtok']} "
                      f"{rate['currency']} por 1M tokens")
     else:
-        lines.append("Tarifa: sin configurar (/price set <in> <out> [moneda])")
+        lines.append("Tarifa: sin configurar (/price set &lt;in&gt; &lt;out&gt; [moneda])")
     await message.answer("\n".join(lines))
 
 
 @router.callback_query(F.data.startswith("mdl:sel:"))
 async def cb_model_sel(cb: CallbackQuery, ctx):
-    _, _, page, name = cb.data.split(":", 3)
-    await _model_select(cb.message, ctx, name)
-    await cb.answer(f"Modelo: {name}")
+    _, _, page, ref = cb.data.split(":", 3)
+    if ref.isdigit():
+        # seleccion por indice (nombres largos de modelo caben en el callback)
+        provider = await ctx.providers.get(cb.from_user.id)
+        models = await ctx.catalog.list(provider)
+        idx = int(page) * 8 + int(ref)
+        if 0 <= idx < len(models):
+            await _model_select(ctx, cb.from_user.id, models[idx].id, cb.message)
+    else:
+        await _model_select(ctx, cb.from_user.id, ref, cb.message)
+    await cb.answer("Modelo actualizado")
 
 
 @router.callback_query(F.data.startswith("mdl:page:"))
 async def cb_model_page(cb: CallbackQuery, ctx):
     page = int(cb.data.split(":")[2])
     await cb.answer()
-    await send_models(cb.message, ctx, page=page)
+    await send_models(cb.message, ctx, page=page, uid=cb.from_user.id)
 
 
 @router.callback_query(F.data == "mdl:refresh")
 async def cb_model_refresh(cb: CallbackQuery, ctx):
     await cb.answer("Actualizando catálogo...")
-    await send_models(cb.message, ctx, force=True)
+    await send_models(cb.message, ctx, force=True, uid=cb.from_user.id)
 
 
 # ------------------------------ parametros ----------------------------------
@@ -329,7 +343,7 @@ async def cmd_temperature(message: Message, ctx, command: CommandObject = None):
     if not command or not command.args:
         v = await ctx.store.get_pref(uid, "temperature")
         await message.answer(f"🌡 Temperature: {v if v is not None else '(por defecto del modelo)'}\n"
-                             "Uso: /temperature <0.0-2.0> · /temperature off")
+                             "Uso: /temperature &lt;0.0-2.0&gt; · /temperature off")
         return
     if command.args.strip().lower() in ("off", "none", "reset"):
         await ctx.store.set_pref(uid, "temperature", None)
@@ -349,7 +363,7 @@ async def cmd_top_p(message: Message, ctx, command: CommandObject = None):
     if not command or not command.args:
         v = await ctx.store.get_pref(uid, "top_p")
         await message.answer(f"🎯 Top P: {v if v is not None else '(por defecto del modelo)'}\n"
-                             "Uso: /top_p <0.0-1.0> · /top_p off")
+                             "Uso: /top_p &lt;0.0-1.0&gt; · /top_p off")
         return
     if command.args.strip().lower() in ("off", "none", "reset"):
         await ctx.store.set_pref(uid, "top_p", None)
@@ -369,7 +383,7 @@ async def cmd_max_tokens(message: Message, ctx, command: CommandObject = None):
     if not command or not command.args:
         v = await ctx.store.get_pref(uid, "max_tokens")
         await message.answer(f"📏 Max tokens: {v if v is not None else '(sin límite)'}\n"
-                             "Uso: /max_tokens <n> · /max_tokens off")
+                             "Uso: /max_tokens &lt;n&gt; · /max_tokens off")
         return
     if command.args.strip().lower() in ("off", "none", "reset"):
         await ctx.store.set_pref(uid, "max_tokens", None)

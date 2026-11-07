@@ -27,7 +27,7 @@ async def cmd_admin(message: Message, ctx):
         await message.answer("⛔ Solo administradores.")
         return
     await message.answer(
-        "🛡 <b>Administración</b>\n/users · /authorize <id> [admin] · /revoke <id>\n"
+        "🛡 <b>Administración</b>\n/users · /authorize &lt;id&gt; [admin] · /revoke &lt;id&gt;\n"
         "/security · /audit · /diagnostics · /config export|import · /notifications on|off")
 
 
@@ -51,7 +51,7 @@ async def cmd_authorize(message: Message, ctx, command: CommandObject = None):
         return
     parts = ((command.args or "") if command else "").split()
     if not parts or not parts[0].isdigit():
-        await message.answer("Uso: /authorize <user_id> [admin]")
+        await message.answer("Uso: /authorize &lt;user_id&gt; [admin]")
         return
     uid = int(parts[0])
     admin = len(parts) > 1 and parts[1].lower() == "admin"
@@ -68,7 +68,7 @@ async def cmd_revoke(message: Message, ctx, command: CommandObject = None):
         return
     arg = (command.args or "").strip() if command else ""
     if not arg.isdigit():
-        await message.answer("Uso: /revoke <user_id>")
+        await message.answer("Uso: /revoke &lt;user_id&gt;")
         return
     uid = int(arg)
     try:
@@ -166,14 +166,33 @@ async def cmd_config(message: Message, ctx, command: CommandObject = None):
                                       caption="📤 Config exportada (SIN secretos)")
         return
     if arg == "import":
+        from ..states import ConfigStates
+        from aiogram.fsm.context import FSMContext as _FSM
+        # se marca el estado; el documento se recibe en on_config_import
         await message.answer("📥 Envía el archivo hj-config.json (sin secretos).")
+        # guardar estado via FSM context del handler (message no lo tiene):
+        # usamos kv temporal como marcador + state del usuario si existe
+        await ctx.store.kv_set(f"cfgimport:{message.from_user.id}", 1, ttl_s=600)
         return
     await message.answer("Uso: /config export · /config import")
 
 
-@router.message(F.document, F.document.file_name == "hj-config.json")
+@router.message(F.document)
 async def on_config_import(message: Message, ctx, state: FSMContext):
+    """Import de configuración por documento (marca cfgimport:&lt;uid&gt; o FSM)."""
+    marker = await ctx.store.kv_get(f"cfgimport:{message.from_user.id}")
+    st = await state.get_state()
+    if not marker and not st:
+        return  # no es un import: otros handlers lo tratan
+    if message.document.file_name != "hj-config.json":
+        await message.answer("⚠️ Esperaba hj-config.json. Cancelado.")
+        await ctx.store.kv_del(f"cfgimport:{message.from_user.id}")
+        await state.clear()
+        return
+    await ctx.store.kv_del(f"cfgimport:{message.from_user.id}")
+    await state.clear()
     if not await _is_admin(ctx, message.from_user.id):
+        await message.answer("⛔ Solo administradores.")
         return
     try:
         file = await ctx.bot.get_file(message.document.file_id)

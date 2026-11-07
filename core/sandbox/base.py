@@ -51,6 +51,15 @@ class SandboxError(Exception):
     pass
 
 
+class ExecutionUnavailable(SandboxError):
+    """No hay un entorno de ejecucion seguro disponible.
+
+    Politica de produccion: si no existe sandbox aislado (Docker rootless),
+    el codigo del proyecto NO se ejecuta y el usuario es informado. Nunca se
+    recurre silenciosamente a un sandbox local inseguro.
+    """
+
+
 class Sandbox(ABC):
     """Un sandbox por proyecto: ejecuta comandos con recursos limitados."""
 

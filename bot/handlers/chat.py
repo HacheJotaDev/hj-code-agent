@@ -7,16 +7,38 @@ usuario. Ver core/prompts/service.py y tests/test_no_default_system_prompt.py.
 from __future__ import annotations
 
 import json
+import re
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, Message
 
 from ..utils import esc, send_long, trunc
+from . import projects as projects_mod
 from .helpers import provider_model, provider_error_message
 
 commands_router = Router(name="chat_cmds")
 free_text_router = Router(name="chat_free")
+
+# Patrones de SECRETOS: nunca se envian al modelo ni se guardan
+_SECRET_PATTERNS = (
+    "sk-", "sk_", "github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
+    "xoxb-", "xoxp-", "AKIA", "AIza", "ya29.", "glpat-", "dop_v1_", "hf_",
+)
+
+
+def _looks_like_secret(text: str) -> bool:
+    t = text.strip()
+    if len(t) < 20 or "\n" in t or " " in t:
+        return False
+    low = t.lower()
+    if any(low.startswith(p.lower()) for p in _SECRET_PATTERNS):
+        return True
+    # token tipo bot de Telegram
+    if re.fullmatch(r"\d{6,}:[A-Za-z0-9_-]{30,}", t):
+        return True
+    # hex/base64 largo con nombre de proveedor en el mismo mensaje
+    return bool(re.fullmatch(r"[A-Za-z0-9_\-=]{40,}", t))
 
 
 # --------------------------- helpers de conversacion ------------------------
@@ -58,11 +80,54 @@ def rows_to_api(rows: list[dict]) -> list[dict]:
 @free_text_router.message(F.text & ~F.text.startswith("/"))
 async def free_chat(message: Message, ctx):
     uid = message.from_user.id
+    text = message.text or ""
+
+    # 1) Guardia anti-secretos: una API key pegada por chat NO va al modelo,
+    #    NO se guarda y se recomienda revocarla.
+    if _looks_like_secret(text):
+        await ctx.store.audit(uid, "secret_in_chat", "patron de token detectado")
+        await message.answer(
+            "🔐 <b>Eso parece una clave/token.</b>\n\n"
+            "No la he guardado ni la he enviado al modelo. Por seguridad:\n"
+            "1) Revoca esa clave en el panel del proveedor (ya quedó expuesta en el chat).\n"
+            "2) Configúrala de forma segura con <code>/setapi</code> (formulario de un solo uso).")
+        return
+
+    # 2) Ruta V3: con proyecto activo e intencion de codigo -> tarea del agente
+    from ..intent import looks_like_code_task, is_ambiguous
+    proj = await ctx.projects.active(uid)
+    if looks_like_code_task(text):
+        if proj:
+            from .agent_cmds import submit_task
+            await submit_task(message, ctx, text)
+            return
+        rows = await ctx.projects.list(uid)
+        if rows and not is_ambiguous(text):
+            from .agent_cmds import submit_task
+            await submit_task(message, ctx, text)  # usa el proyecto mas reciente
+            return
+        if is_ambiguous(text):
+            from ..keyboards import chat_or_task_kb
+            token = ctx.store.new_token()[:12]
+            await ctx.store.kv_set(f"choice:{token}", text[:1000], ttl_s=600)
+            await message.answer(
+                "🤔 ¿Quieres que trabaje en el proyecto o es solo una pregunta?",
+                reply_markup=chat_or_task_kb(token))
+            return
+        # sin proyectos: chat normal con sugerencia
+        await message.answer(
+            "💡 Aún no tienes proyectos. Envía un ZIP o escribe /newproject Nombre, "
+            "y trabajo en tu código. Mientras tanto te respondo como chat:")
+
+    await run_plain_chat(message, ctx, uid, text)
+
+
+async def run_plain_chat(message: Message, ctx, uid: int, text: str):
     conv = await ensure_conversation(ctx, uid)
     pname = await ctx.providers.active_name(uid)
     model = await ctx.store.get_pref(uid, f"model:{pname}")
     if not model:
-        await message.answer("🧠 Primero elige un modelo: /models y /model select <nombre>")
+        await message.answer("🧠 Primero elige un modelo: /models y /model select &lt;nombre&gt;")
         return
     try:
         provider = await ctx.providers.get(uid)
@@ -73,8 +138,8 @@ async def free_chat(message: Message, ctx):
     # En modo nativo NO se anade system: build_messages devuelve el historial tal cual
     proj = await ctx.projects.active(uid)
     messages = await ctx.prompts.build_messages(uid, rows_to_api(history), proj)
-    messages.append({"role": "user", "content": message.text})
-    await ctx.store.add_message(conv["id"], "user", message.text)
+    messages.append({"role": "user", "content": text})
+    await ctx.store.add_message(conv["id"], "user", text)
     await ctx.store.touch_conversation(conv["id"], provider=pname, model=model)
     typing_msg = await message.answer("✍️")
     use_stream = (await ctx.store.get_pref(uid, "stream")) == "1"
@@ -134,14 +199,15 @@ async def cmd_chats(message: Message, ctx):
         mark = "●" if str(c["id"]) == str(active) else "○"
         lines.append(f"{mark} <b>#{c['id']}</b> {esc(trunc(c['title'] or '(sin título)', 30))} "
                      f"· {c['n_msgs']} msj · {esc(c['model'] or '-')}")
-    lines.append("\nCambiar: /chat select <id>")
+    lines.append("\nCambiar: /chat select &lt;id&gt;")
+    await send_long(message, "\n".join(lines))
 
 
 @commands_router.message(Command("chat"))
 async def cmd_chat(message: Message, ctx, command: CommandObject):
     uid = message.from_user.id
     if not command.args or not command.args.replace("select", "").strip().isdigit():
-        await message.answer("Uso: /chat select <id>")
+        await message.answer("Uso: /chat select &lt;id&gt;")
         return
     cid = int(command.args.replace("select", "").strip())
     conv = await ctx.store.get_conversation(cid)
@@ -203,7 +269,7 @@ async def cmd_exportchat(message: Message, ctx):
 async def cmd_searchchat(message: Message, ctx, command: CommandObject):
     uid = message.from_user.id
     if not command.args:
-        await message.answer("Uso: /searchchat <texto>")
+        await message.answer("Uso: /searchchat &lt;texto&gt;")
         return
     rows = await ctx.store.search_messages(uid, command.args, limit=10)
     if not rows:

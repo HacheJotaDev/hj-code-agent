@@ -21,7 +21,7 @@ async def cmd_memory(message: Message, ctx, command: CommandObject = None):
     if arg == "list" or not arg:
         rows = await ctx.store.memory_list(uid)
         if not rows:
-            await message.answer("Memoria vacía. Añade: /memory <texto>")
+            await message.answer("Memoria vacía. Añade: /memory &lt;texto&gt;")
             return
         lines = ["<b>🧠 Memoria</b>"]
         for r in rows:

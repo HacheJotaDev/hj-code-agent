@@ -90,12 +90,16 @@ class TaskQueue:
                 continue
             self._wake.clear()
             while not self._stopping:
-                task = await self.s.store.next_queued()
-                if not task:
+                # Vistazo para respetar 1 tarea por usuario sin reclamar:
+                peek = await self.s.store.next_queued()
+                if not peek:
                     break
-                uid = task["user_id"]
-                if self._user_busy.get(uid):
-                    break  # respeta 1 tarea por usuario
+                if self._user_busy.get(peek["user_id"]):
+                    break
+                # Reclamacion ATOMICA: solo uno de varios workers obtiene la fila.
+                task = await self.s.store.claim_next_queued()
+                if not task:
+                    continue  # otro worker se la llevo; reintentar
                 await self._execute(task)
 
     async def _execute(self, task: dict) -> None:
@@ -109,8 +113,7 @@ class TaskQueue:
                                            error="El proyecto ya no existe",
                                            finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
             return
-        await self.s.store.update_task(tid, status="running",
-                                       started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        # El claim ya la puso en 'running'; aqui solo registramos el estado vivo.
         self._user_busy[uid] = tid
         cancel_event = asyncio.Event()
         rt = RunningTask(task_id=tid, cancel_event=cancel_event, sandbox=None)
@@ -124,27 +127,31 @@ class TaskQueue:
 
         try:
             from pathlib import Path
+            from ..sandbox.factory import sandbox_semaphore
             workspace = Path(project["path"])
             guard = PathGuard(workspace)
-            sandbox = await self.s.make_sandbox(workspace, project)
-            rt.sandbox = sandbox
-            await sandbox.setup()
-            ctx = AgentContext(
-                user_id=uid, chat_id=chat_id, project=project, workspace=workspace,
-                guard=guard, sandbox=sandbox, services=self.s, cancel_event=cancel_event,
-                task_id=tid, max_steps=task["max_steps"], notify=notify)
-            rt.ctx = ctx
-            if task["kind"] == "multiagent":
-                from ..agent.multiagent import MultiAgentRunner
-                result = await MultiAgentRunner(self.s).run_pipeline(ctx, task["title"], notify)
-                outcome = TaskOutcome(summary=result["summary"], files_touched=[
-                    f for ph in result["phases"] for f in ph.get("files", [])])
-                outcome.cost = sum(p.get("cost") or 0 for p in result["phases"])
-                outcome.cost_known = any(p.get("cost_known") for p in result["phases"])
-                outcome.cancelled = any(p.get("cancelled") for p in result["phases"])
-            else:
-                outcome = await self.s.engine.run_task(ctx, task["title"], notify=notify)
-            await self._finalize(task, ctx, outcome)
+            # Limite global de sandboxes simultaneos (produccion: 1)
+            sem = sandbox_semaphore(getattr(self.s.settings, "max_concurrent_sandboxes", 1))
+            async with sem:
+                sandbox = await self.s.make_sandbox(workspace, project)
+                rt.sandbox = sandbox
+                await sandbox.setup()
+                ctx = AgentContext(
+                    user_id=uid, chat_id=chat_id, project=project, workspace=workspace,
+                    guard=guard, sandbox=sandbox, services=self.s, cancel_event=cancel_event,
+                    task_id=tid, max_steps=task["max_steps"], notify=notify)
+                rt.ctx = ctx
+                if task["kind"] == "multiagent":
+                    from ..agent.multiagent import MultiAgentRunner
+                    result = await MultiAgentRunner(self.s).run_pipeline(ctx, task["title"], notify)
+                    outcome = TaskOutcome(summary=result["summary"], files_touched=[
+                        f for ph in result["phases"] for f in ph.get("files", [])])
+                    outcome.cost = sum(p.get("cost") or 0 for p in result["phases"])
+                    outcome.cost_known = any(p.get("cost_known") for p in result["phases"])
+                    outcome.cancelled = any(p.get("cancelled") for p in result["phases"])
+                else:
+                    outcome = await self.s.engine.run_task(ctx, task["title"], notify=notify)
+                await self._finalize(task, ctx, outcome)
         except Exception as e:
             log.exception("Error ejecutando tarea %s", tid)
             await self.s.store.update_task(
@@ -176,6 +183,19 @@ class TaskQueue:
                 await self.s.bot.send_message(task["chat_id"], summary[:4000])
             except Exception:
                 pass
+        # Entrega del ZIP del proyecto si el agente lo genero (flujo V3)
+        zip_path = getattr(ctx, "exported_zip", None)
+        if zip_path:
+            try:
+                from pathlib import Path as _P
+                from aiogram.types import BufferedInputFile
+                p = _P(zip_path)
+                if p.exists() and p.stat().st_size <= 49 * 1024 * 1024:
+                    await self.s.bot.send_document(
+                        task["chat_id"], BufferedInputFile(p.read_bytes(), p.name),
+                        caption=f"📦 Proyecto {ctx.project['name']} exportado")
+            except Exception:
+                log.warning("No se pudo enviar el ZIP exportado de la tarea %s", tid)
         await self.s.store.audit(task["user_id"], "task.finish", f"#{tid} {status}")
 
     @staticmethod

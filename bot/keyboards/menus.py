@@ -22,13 +22,18 @@ MENU_SECTIONS = [
 
 
 def main_menu_kb(status: str = "") -> InlineKeyboardMarkup:
+    """Menú principal V3: sencillo; GitHub vive en Configuración."""
     kb = InlineKeyboardBuilder()
-    for key, label in MENU_SECTIONS:
-        if key == "chat":
-            kb.button(text=label, callback_data="menu:chatinfo")
-        else:
-            kb.button(text=label, callback_data=f"menu:{key}")
-    kb.adjust(2)
+    kb.button(text="💬 Chat con IA", callback_data="menu:chatinfo")
+    kb.button(text="📎 Enviar proyecto", callback_data="menu:upload")
+    kb.button(text="📁 Mis proyectos", callback_data="menu:projects")
+    kb.button(text="🛠 Tareas activas", callback_data="menu:tasks")
+    kb.button(text="🧠 Modelo", callback_data="menu:providers")
+    kb.button(text="💳 Saldo y tokens", callback_data="menu:billing")
+    kb.button(text="⚙️ Configuración", callback_data="menu:settings")
+    kb.button(text="🐙 GitHub (opcional)", callback_data="menu:github")
+    kb.button(text="❓ Ayuda", callback_data="menu:help")
+    kb.adjust(2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
@@ -64,8 +69,9 @@ def providers_kb(providers: list[dict], active: str | None = None,
 def models_kb(models: list[str], page: int = 0, per_page: int = 8) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     chunk = models[page * per_page:(page + 1) * per_page]
-    for m in chunk:
-        kb.button(text=m, callback_data=f"mdl:sel:{page}:{m[:48]}")
+    for i, m in enumerate(chunk):
+        # callback por INDICE: los ids largos no caben en 64 bytes
+        kb.button(text=m[:40], callback_data=f"mdl:sel:{page}:{page * per_page + i}")
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton(text="◀️", callback_data=f"mdl:page:{page - 1}"))
@@ -176,4 +182,13 @@ def approval_kb(req_id: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Autorizar", callback_data=f"auth:yes:{req_id}")
     kb.button(text="❌ Rechazar", callback_data=f"auth:no:{req_id}")
+    return kb.as_markup()
+
+
+def chat_or_task_kb(token: str) -> InlineKeyboardMarkup:
+    """Elección sencilla cuando hay ambigüedad (V3)."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🛠 Trabajar en el código", callback_data=f"choice:task:{token}")
+    kb.button(text="💬 Solo es una pregunta", callback_data=f"choice:chat:{token}")
+    kb.adjust(1)
     return kb.as_markup()

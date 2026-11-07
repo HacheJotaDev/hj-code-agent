@@ -24,7 +24,7 @@ async def cmd_terminal(message: Message, ctx, command: CommandObject = None):
         return
     cmd = (command.args or "").strip() if command else ""
     if not cmd:
-        await message.answer("Uso: /terminal <comando>\nEj: /terminal python --version")
+        await message.answer("Uso: /terminal &lt;comando&gt;\nEj: /terminal python --version")
         return
     sbx = await _sandbox_for(message, ctx, proj)
     try:
@@ -62,7 +62,7 @@ async def cmd_install(message: Message, ctx, command: CommandObject = None):
             if not detected:
                 await message.answer("No detecto gestor de dependencias "
                                      "(requirements.txt, package.json, go.mod, pom.xml...). "
-                                     "Usa: /install <comando>")
+                                     "Usa: /install &lt;comando&gt;")
                 return
             cmd = " ".join(detected)
         await message.answer(f"📦 Instalando: <code>{esc(cmd)}</code> ...")
@@ -116,7 +116,7 @@ async def cmd_processes(message: Message, ctx):
     if not proj:
         return
     await message.answer("ℹ️ Los procesos corren dentro del sandbox del proyecto. "
-                         "Usa /logs <id> para ver la actividad de tareas y "
+                         "Usa /logs &lt;id&gt; para ver la actividad de tareas y "
                          "/sandbox status para el estado del contenedor.")
 
 

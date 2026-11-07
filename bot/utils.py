@@ -1,8 +1,18 @@
-"""Auxiliares de presentacion: escape HTML, textos largos, formatos."""
+"""Auxiliares de presentacion: escape HTML, envio seguro, textos largos.
+
+`send_safe` es la RED DE SEGURIDAD contra TelegramBadRequest: si el HTML es
+invalido (p. ej. contenido generado por el modelo con etiquetas tipo
+&lt;tarea&gt;), reintenta en texto plano en lugar de perder la respuesta.
+"""
 from __future__ import annotations
 
 import html
+import logging
 from datetime import datetime, timezone
+
+from aiogram.exceptions import TelegramBadRequest
+
+log = logging.getLogger(__name__)
 
 
 def esc(text) -> str:
@@ -20,7 +30,7 @@ def fmt_bytes(n: int) -> str:
 def fmt_money(v, currency: str = "USD") -> str:
     if v is None:
         return "n/d"
-    return f"{v:.4f} {currency}".rstrip("0").rstrip(".") + ("" if v else "")
+    return f"{v:.4f} {currency}"
 
 
 def fmt_cost(v, currency: str = "USD") -> str:
@@ -44,8 +54,28 @@ def trunc(s, n: int = 300) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _strip_html_tags(text: str) -> str:
+    """Convierte un mensaje HTML roto en texto legible sin etiquetas."""
+    import re
+    txt = re.sub(r"</?(b|i|u|s|code|pre|a|blockquote|tg-spoiler|tg-emoji)[^>]*>", "", text)
+    txt = txt.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    return txt
+
+
+async def send_safe(message, text: str, parse_mode: str | None = "HTML",
+                    reply_markup=None) -> object:
+    """Envia un mensaje; si Telegram rechaza el HTML lo reenvia en texto plano."""
+    if parse_mode != "HTML":
+        return await message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    try:
+        return await message.answer(text, parse_mode="HTML", reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        log.warning("HTML invalido ( %s ); reenviando en texto plano", str(e)[:120])
+        return await message.answer(_strip_html_tags(text), reply_markup=reply_markup)
+
+
 async def send_long(message, text: str, parse_mode: str | None = "HTML") -> None:
-    """Envia un texto troceado al limite de Telegram (4096)."""
+    """Envia un texto troceado al limite de Telegram (4096), con fallback seguro."""
     limit = 3900
     chunk = text
     first = True
@@ -57,9 +87,11 @@ async def send_long(message, text: str, parse_mode: str | None = "HTML") -> None
             if cut > limit // 2:
                 chunk = piece[cut:] + chunk
                 piece = piece[:cut]
-        target = message if first and hasattr(message, "answer") else message
-        if first and hasattr(message, "answer"):
+        try:
             await message.answer(piece, parse_mode=parse_mode)
-        else:
-            await message.answer(piece, parse_mode=parse_mode)
+        except TelegramBadRequest:
+            if parse_mode == "HTML":
+                await message.answer(_strip_html_tags(piece))
+            else:
+                raise
         first = False

@@ -30,6 +30,7 @@ async def settings(tmp_path) -> Settings:
         HJ_WORKSPACES_DIR=tmp_path / "workspaces",
         HJ_BACKUPS_DIR=tmp_path / "backups",
         HJ_SANDBOX_BACKEND="local",
+        HJ_ALLOW_LOCAL_SANDBOX=1,   # los tests ejecutan con sandbox local explicito
         HJ_SANDBOX_MEMORY_MB=256,
         HJ_SANDBOX_TIMEOUT_S=10,
     )
@@ -58,6 +59,8 @@ async def services(store, vault, tmp_path, settings) -> SimpleNamespace:
     from core.agent.engine import AgentEngine
     from core.billing.pricing import Pricing
     from core.billing.usage_store import UsageStore
+    from core.models.catalog import ModelCatalog
+    from core.projects.manager import ProjectManager
     from core.prompts.service import PromptService
     from core.providers.registry import ProviderRegistry
     from core.tasks.queue import TaskQueue
@@ -73,12 +76,23 @@ async def services(store, vault, tmp_path, settings) -> SimpleNamespace:
     svc.providers = ProviderRegistry(store)
     svc.providers.set_vault(vault)
     await svc.providers.seed("https://api.deepseek.com")
+    svc.catalog = ModelCatalog(store)
+    svc.projects = ProjectManager(store, tmp_path / "workspaces", tmp_path / "backups")
     svc.approvals = ApprovalManager(store)
     svc.engine = AgentEngine(svc)
     svc.github = SimpleNamespace(create_pull_request=lambda *a, **k: _async({"html_url": "ok"}))
     svc.broker = FakeBroker(store)
+
+    from core.sandbox.factory import create_sandbox_backend
+
+    async def make_sandbox(workspace, project=None):
+        return await create_sandbox_backend(
+            workspace, settings,
+            project_id=project["id"] if project else None,
+            project_network=(project.get("network_enabled") if project else None))
+
+    svc.make_sandbox = make_sandbox
     svc.bot = FakeBot()
-    svc.make_sandbox = None
     svc.queue = None
     return svc
 

@@ -54,12 +54,19 @@ class Settings(BaseSettings):
     # Sandbox
     sandbox_backend: str = Field(default="auto", validation_alias="HJ_SANDBOX_BACKEND")
     sandbox_image: str = Field(default="python:3.12-slim", validation_alias="HJ_SANDBOX_IMAGE")
-    sandbox_memory_mb: int = Field(default=512, validation_alias="HJ_SANDBOX_MEMORY_MB")
+    sandbox_memory_mb: int = Field(default=1024, validation_alias="HJ_SANDBOX_MEMORY_MB")
     sandbox_cpus: float = Field(default=1.0, validation_alias="HJ_SANDBOX_CPUS")
     sandbox_pids: int = Field(default=128, validation_alias="HJ_SANDBOX_PIDS")
     sandbox_timeout_s: int = Field(default=120, validation_alias="HJ_SANDBOX_TIMEOUT_S")
     sandbox_network: bool = Field(default=True, validation_alias="HJ_SANDBOX_NETWORK")
     docker_network: str = Field(default="", validation_alias="HJ_DOCKER_NETWORK")
+    # Docker rootless independiente (NUNCA el daemon principal del host):
+    # ej: unix:///run/user/1001/docker.sock
+    docker_host: str = Field(default="", validation_alias="HJ_DOCKER_HOST")
+    # Politica estricta: si no hay sandbox aislado, NO se ejecuta codigo.
+    # El backend local (inseguro) requiere este interruptor explicito (dev/tests).
+    allow_local_sandbox: bool = Field(default=False, validation_alias="HJ_ALLOW_LOCAL_SANDBOX")
+    max_concurrent_sandboxes: int = Field(default=1, validation_alias="HJ_MAX_CONCURRENT_SANDBOXES")
     workspaces_host_dir: Optional[str] = Field(
         default=None, validation_alias="HJ_WORKSPACES_HOST_DIR"
     )
@@ -81,13 +88,33 @@ class Settings(BaseSettings):
     @field_validator("admin_user_ids", mode="before")
     @classmethod
     def _parse_ids(cls, v):
+        # Acepta: int suelto (424242), str "424242", listas [1,2], "1,2" y "1; 2".
+        # Bug A: list(int) lanzaba TypeError; ahora es tolerante a todos los formatos.
         if v in (None, ""):
             return []
+        if isinstance(v, int):
+            return [v]
+        if isinstance(v, float) and float(v).is_integer():
+            return [int(v)]
         if isinstance(v, str):
-            return [int(x.strip()) for x in v.replace(";", ",").split(",") if x.strip()]
-        return list(v)
+            out = []
+            for x in v.replace(";", ",").split(","):
+                x = x.strip().strip('"\'')
+                if not x:
+                    continue
+                try:
+                    out.append(int(x))
+                except ValueError:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "HJ_ADMIN_USER_IDS: valor ignorado (no numerico): %r", x)
+            return out
+        try:
+            return [int(x) for x in v]
+        except (TypeError, ValueError):
+            return []
 
-    @field_validator("sandbox_network", "silent_reject", mode="before")
+    @field_validator("sandbox_network", "silent_reject", "allow_local_sandbox", mode="before")
     @classmethod
     def _parse_bool(cls, v):
         return _to_bool(v)

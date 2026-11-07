@@ -11,12 +11,15 @@ def fmt_u(user) -> str:
     return f"{name} (<code>{user.id}</code>)"
 
 
-async def get_project(ctx, message: Message, *, required: bool = True):
-    proj = await ctx.projects.active(message.from_user.id)
+async def get_project(ctx, message: Message, *, required: bool = True, uid: int | None = None):
+    """Proyecto activo del USUARIO (uid explicito para callbacks; message.from_user
+    en callbacks es el bot)."""
+    uid = uid or message.from_user.id
+    proj = await ctx.projects.active(uid)
     if not proj and required:
         await message.answer(
             "📁 No hay proyecto seleccionado.\n"
-            "Crea uno con <code>/newproject</code> o elige con <code>/projects</code>.")
+            "Envía un ZIP y creo el proyecto, o usa <code>/newproject</code> / <code>/projects</code>.")
     return proj
 
 

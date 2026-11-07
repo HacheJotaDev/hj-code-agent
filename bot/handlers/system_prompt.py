@@ -22,8 +22,8 @@ MODE_LABEL = {"native": "🟢 NATIVO (sin system prompt)",
               "project": "🟣 POR PROYECTO"}
 
 
-async def show_prompt_menu(message: Message, ctx):
-    uid = message.from_user.id
+async def show_prompt_menu(message: Message, ctx, uid: int | None = None):
+    uid = uid or message.from_user.id
     proj = await ctx.projects.active(uid)
     eff = await ctx.prompts.status(uid, proj)
     text = [
@@ -137,7 +137,7 @@ async def cb_set(cb: CallbackQuery, ctx, state: FSMContext):
                             "/cancel para abortar.")
 
 
-@router.message(SystemPromptStates.waiting_text, F.text)
+@router.message(SystemPromptStates.waiting_text, F.text & ~F.text.startswith("/"))
 async def on_prompt_text(message: Message, ctx, state: FSMContext):
     await ctx.prompts.set_custom(message.from_user.id, message.text)
     await state.clear()

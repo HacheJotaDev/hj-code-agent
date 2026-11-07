@@ -52,10 +52,21 @@ def test_red_dedicada():
 
 
 def test_factory_elige_backend():
-    assert sandbox_kind("auto", docker_ok=False) == "local"
+    import pytest as _pytest
+    from core.sandbox.base import ExecutionUnavailable
+    # Con Docker disponible: siempre docker
     assert sandbox_kind("auto", docker_ok=True) == "docker"
-    assert sandbox_kind("local", docker_ok=True) == "local"
-    assert sandbox_kind("docker", docker_ok=False) == "local"
+    assert sandbox_kind("docker", docker_ok=True) == "docker"
+    # Sin Docker: NUNCA fallback silencioso (politica V3)
+    with _pytest.raises(ExecutionUnavailable):
+        sandbox_kind("docker", docker_ok=False)
+    with _pytest.raises(ExecutionUnavailable):
+        sandbox_kind("auto", docker_ok=False, allow_local=False)
+    # Solo el interruptor explicito de desarrollo habilita local
+    assert sandbox_kind("auto", docker_ok=False, allow_local=True) == "local"
+    assert sandbox_kind("local", docker_ok=False, allow_local=True) == "local"
+    with _pytest.raises(ExecutionUnavailable):
+        sandbox_kind("local", docker_ok=False, allow_local=False)
 
 
 import shutil

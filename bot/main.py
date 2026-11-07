@@ -31,14 +31,14 @@ def setup_logging(settings) -> None:
 async def run() -> None:
     settings = load_settings()
     setup_logging(settings)
-    log.info("=== HJ CODE AGENT V2 arrancando ===")
+    log.info("=== HJ CODE AGENT V3 arrancando ===")
     if not settings.telegram_bot_token:
         log.critical("Falta HJ_TELEGRAM_BOT_TOKEN en el .env — el bot no puede arrancar")
         sys.exit(2)
 
     ctx = await build_context(settings)
 
-    from bot.middlewares import AuthMiddleware, ContextMiddleware
+    from bot.middlewares import AuthMiddleware, ContextMiddleware, UpdateDedupMiddleware
     from bot.handlers import ALL_ROUTERS
     from core.authentication.auth_service import AuthService
 
@@ -48,8 +48,9 @@ async def run() -> None:
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     ctx.bot = bot
     dp = Dispatcher(storage=MemoryStorage())
-    # orden: contexto -> auth
+    # orden: contexto -> dedup -> auth
     dp.update.middleware(ContextMiddleware(ctx))
+    dp.update.middleware(UpdateDedupMiddleware())
     dp.update.middleware(AuthMiddleware())
     for r in ALL_ROUTERS:
         dp.include_router(r)
@@ -84,7 +85,10 @@ async def run() -> None:
 
     try:
         log.info("Bot en marcha (long polling). Ctrl+C para detener.")
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        # drop_pending_updates: tras una caida NO reprocesamos mensajes viejos
+        # (evita respuestas duplicadas y comandos desactualizados)
+        await dp.start_polling(bot, drop_pending_updates=True,
+                               allowed_updates=dp.resolve_used_update_types())
     finally:
         log.info("Deteniendo servicios...")
         await ctx.queue.stop()

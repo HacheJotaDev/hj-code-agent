@@ -22,7 +22,7 @@ TOOL_NAMES = [
     "list_files", "read_file", "write_file", "edit_file", "apply_patch", "search_files",
     "search_code", "create_directory", "move_file", "delete_file", "execute_command",
     "install_dependencies", "run_tests", "run_build", "git_status", "git_diff", "git_branch",
-    "git_commit", "git_push", "github_pull_request", "get_task_logs",
+    "git_commit", "git_push", "github_pull_request", "get_task_logs", "export_zip",
 ]
 
 _S = {"type": "object", "properties": {}, "required": []}
@@ -95,6 +95,7 @@ TOOL_SCHEMAS: list[dict] = [
             ["title"]),
     _schema("get_task_logs", "Devuelve el registro de pasos de la tarea actual.",
             {"task_id": {"type": "integer", "description": "opcional; por defecto la tarea en curso"}}),
+    _schema("export_zip", "Empaqueta el proyecto completo (sin .git/node_modules) en un ZIP y se lo entrega al usuario al terminar la tarea. Úsalo cuando el usuario pida el proyecto final o devolver los cambios.", {}),
 ]
 
 # --------------------------- utilidades --------------------------------
@@ -523,6 +524,26 @@ async def tool_get_task_logs(ctx: AgentContext, args: dict) -> str:
     return _ok("\n".join(logs[-50:]) or "(sin registros)")
 
 
+async def tool_export_zip(ctx: AgentContext, args: dict) -> str:
+    """Empaqueta el proyecto y registra el ZIP para entrega automatica al final."""
+    import time as _t
+    from ..projects.ziputils import ZipUnsafe, create_zip
+    name = "proyecto"
+    try:
+        name = ctx.project.get("name") or name
+    except Exception:
+        pass
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.") or "proyecto"
+    out_dir = Path(getattr(ctx.services.settings, "backups_dir", "/tmp"))
+    out = out_dir / f"project-{ctx.project.get('id', 0)}-{slug}-{_t.strftime('%Y%m%d-%H%M%S')}.zip"
+    try:
+        create_zip(Path(ctx.project["path"]), out)
+    except (ZipUnsafe, OSError) as e:
+        return _err(f"No se pudo crear el ZIP: {e}")
+    ctx.exported_zip = str(out)
+    return _ok(f"ZIP creado: {out.name} ({out.stat().st_size} bytes). Se entregara al finalizar.")
+
+
 # --------------------------- despachador -------------------------------
 
 TOOL_FUNCS = {
@@ -545,6 +566,7 @@ TOOL_FUNCS = {
     "git_branch": tool_git_branch,
     "git_commit": tool_git_commit,
     "get_task_logs": tool_get_task_logs,
+    "export_zip": tool_export_zip,
 }
 
 

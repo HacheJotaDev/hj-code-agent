@@ -17,18 +17,19 @@ from .helpers import get_project
 router = Router(name="projects")
 
 
-async def show_projects(message: Message, ctx):
-    uid = message.from_user.id
+async def show_projects(message: Message, ctx, uid: int | None = None):
+    uid = uid or message.from_user.id
     rows = await ctx.projects.list(uid)
     active = await ctx.projects.active(uid)
     if not rows:
-        await message.answer("No hay proyectos. Crea uno: /newproject <nombre>")
+        await message.answer("No hay proyectos. Envía un ZIP y creo uno, o usa "
+                             "/newproject &lt;nombre&gt;.")
         return
     lines = ["<b>🗂 Proyectos</b>"]
     for p in rows:
         mark = "●" if active and p["id"] == active["id"] else "○"
         lines.append(f"{mark} #{p['id']} <b>{esc(p['name'])}</b>")
-    lines.append("\nSelecciona con botones o /project select <id|nombre>")
+    lines.append("\nSelecciona con botones o /project select &lt;id|nombre&gt;")
     await message.answer("\n".join(lines), reply_markup=projects_kb(rows, active["id"] if active else None))
 
 
@@ -55,11 +56,11 @@ async def _create(message: Message, ctx, name: str):
         return
     await ctx.store.set_pref(message.from_user.id, "active_project", proj["id"])
     await message.answer(f"✅ Proyecto <b>{esc(name)}</b> creado y seleccionado.\n"
-                         f"Ruta: {esc(proj['path'])}\n\nSube archivos (documento) o usa el agente: "
-                         f"/run <tarea>")
+                         f"Ruta: {esc(proj['path'])}\n\nEnvía archivos o escribe qué quieres "
+                         f"que construya (también /run &lt;tarea&gt;).")
 
 
-@router.message(ProjectStates.waiting_name, F.text)
+@router.message(ProjectStates.waiting_name, F.text & ~F.text.startswith("/"))
 async def on_project_name(message: Message, ctx, state: FSMContext):
     await state.clear()
     await _create(message, ctx, message.text.strip()[:48])
@@ -112,6 +113,15 @@ async def cmd_project(message: Message, ctx, command: CommandObject = None):
                 reply_markup=confirm_kb("projdel", str(proj["id"])))
     else:
         await message.answer("Subcomandos: select · info · rename · export · archive · delete")
+
+
+@router.message(Command("export"))
+async def cmd_export(message: Message, ctx):
+    """Entrega el ZIP del proyecto activo (flujo V3: sin GitHub)."""
+    proj = await get_project(ctx, message)
+    if not proj:
+        return
+    await _export(message, ctx, proj)
 
 
 async def _info(message: Message, ctx, proj):
@@ -252,10 +262,10 @@ async def cmd_file(message: Message, ctx, command: CommandObject = None):
         except (PathDenied, OSError) as e:
             await message.answer(f"❌ {esc(e)}")
     elif sub == "edit":
-        await message.answer("Para editar: usa el agente (/run edita X...) o /file edit <ruta> "
-                             "<contenido> no es interactivo. El flujo recomendado es /run.")
+        await message.answer("Para editar: pídeselo al agente en lenguaje natural "
+                             "(o /run edita X...).")
     else:
-        await message.answer("Uso: /file read <ruta> · /file download <ruta>")
+        await message.answer("Uso: /file read &lt;ruta&gt; · /file download &lt;ruta&gt;")
 
 
 @router.message(Command("workspace"))
@@ -270,14 +280,39 @@ async def cmd_workspace(message: Message, ctx):
 # ------------------------------- subidas ------------------------------------
 
 
-@router.message(F.document)
-async def on_document(message: Message, ctx):
-    """Recibe archivos individuales o ZIP/TAR hacia el proyecto activo."""
-    uid = message.from_user.id
+async def ensure_project(ctx, uid: int, prefer_name: str | None = None) -> dict:
+    """Flujo V3: devuelve el proyecto activo; si no hay, usa el mas reciente;
+    si no hay ninguno, crea uno automaticamente. Elimina los pasos manuales."""
     proj = await ctx.projects.active(uid)
-    if not proj:
-        await message.answer("📁 Primero selecciona un proyecto: /projects")
-        return
+    if proj:
+        return proj
+    rows = await ctx.projects.list(uid)
+    if rows:
+        await ctx.store.set_pref(uid, "active_project", rows[0]["id"])
+        return rows[0]
+    name = (prefer_name or "mi-proyecto").strip()[:48] or "mi-proyecto"
+    proj = await ctx.projects.create(uid, name)
+    await ctx.store.set_pref(uid, "active_project", proj["id"])
+    return proj
+
+
+@router.message(F.document)
+async def on_document(message: Message, ctx, state: FSMContext):
+    """Flujo V3: recibe archivos SIN pasos previos.
+
+    - ZIP/TAR: crea (o reutiliza) un proyecto con el nombre del archivo, extrae
+      con validaciones y resume que contiene.
+    - Archivo suelto: lo guarda en el proyecto (activo, reciente o nuevo).
+    Si hay un estado FSM capturando documentos (import system prompt / config),
+    cede el paso (SkipHandler) al handler correspondiente.
+    """
+    if await state.get_state():
+        from aiogram.dispatcher.event.bases import SkipHandler
+        raise SkipHandler  # otro flujo (import json, config...) procesa el documento
+    uid = message.from_user.id
+    if await ctx.store.kv_get(f"cfgimport:{uid}"):
+        from aiogram.dispatcher.event.bases import SkipHandler
+        raise SkipHandler  # el usuario está importando configuración (admin.py)
     doc = message.document
     if doc.file_size and doc.file_size > ctx.settings.max_file_mb * 1024 * 1024:
         await message.answer(f"⛔ El archivo supera {ctx.settings.max_file_mb} MB (/limits)")
@@ -291,30 +326,68 @@ async def on_document(message: Message, ctx):
         return
     name = doc.file_name or "archivo.bin"
     from core.projects.ziputils import ZipUnsafe, extract_archive
-    dest = Path(proj["path"])
-    if name.lower().endswith((".zip", ".tar.gz", ".tgz", ".tar")):
-        tmp = Path("/tmp") / f"upload-{uid}-{name}"
-        tmp.write_bytes(data)
+    is_archive = name.lower().endswith((".zip", ".tar.gz", ".tgz", ".tar"))
+    if is_archive:
+        base_name = name.rsplit(".", 1)[0].replace(".tar", "") or "proyecto"
+        # reutiliza el proyecto con el mismo nombre si existe; si no, crea uno
+        proj = await ctx.store.get_project_by_name(uid, base_name)
+        if not proj:
+            try:
+                proj = await ctx.projects.create(uid, base_name)
+            except Exception as e:
+                await message.answer(f"❌ No pude crear el proyecto: {esc(e)}")
+                return
+        await ctx.store.set_pref(uid, "active_project", proj["id"])
+        conv_id = await ctx.store.get_pref(uid, "active_conversation")
+        if conv_id:
+            await ctx.store.touch_conversation(int(conv_id), title=f"{base_name}")
+        dest = Path(proj["path"])
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix="-" + name, delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = Path(tmp.name)
         try:
-            stats = extract_archive(tmp, dest, max_files=ctx.settings.max_zip_files,
+            stats = extract_archive(tmp_path, dest, max_files=ctx.settings.max_zip_files,
                                     max_unpacked_mb=ctx.settings.max_zip_unpacked_mb)
-            await message.answer(
-                f"📦 <b>{esc(name)}</b> descomprimido en el proyecto.\n"
-                f"{stats['files']} archivos · {fmt_bytes(stats['unpacked_bytes'])}")
         except ZipUnsafe as e:
             await message.answer(f"⛔ ZIP RECHAZADO por seguridad: {esc(e)}")
+            return
         finally:
-            tmp.unlink(missing_ok=True)
-    else:
-        from security.path_guard import PathGuard, PathDenied
-        try:
-            target = PathGuard(dest).resolve(name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-            await message.answer(f"📄 Guardado como <b>{esc(name)}</b> "
-                                 f"({fmt_bytes(len(data))}) en el proyecto activo.")
-        except PathDenied as e:
-            await message.answer(f"⛔ {esc(e)}")
+            tmp_path.unlink(missing_ok=True)
+        await ctx.store.audit(uid, "upload", f"{name} -> proyecto {proj['name']}")
+        # Resumen del contenido
+        exts: dict[str, int] = {}
+        entry_points = []
+        for p in dest.rglob("*"):
+            if p.is_file() and ".git" not in p.parts:
+                e = p.suffix.lower().lstrip(".") or "(sin ext)"
+                exts[e] = exts.get(e, 0) + 1
+                if p.name in ("main.py", "app.py", "manage.py", "bot.py", "run.py",
+                              "package.json", "pyproject.toml", "requirements.txt",
+                              "Makefile", "README.md"):
+                    entry_points.append(p.relative_to(dest).as_posix())
+        top = ", ".join(f".{k} ×{v}" for k, v in sorted(exts.items(), key=lambda x: -x[1])[:6])
+        await message.answer(
+            f"📦 <b>{esc(name)}</b> recibido y extraído en el proyecto "
+            f"<b>{esc(proj['name'])}</b> (#{proj['id']}, seleccionado).\n"
+            f"{stats['files']} archivos · {fmt_bytes(stats['unpacked_bytes'])}\n"
+            + (f"Tipos: {esc(top)}\n" if top else "")
+            + ("Puntos de entrada: " + esc(", ".join(entry_points[:6])) if entry_points else "")
+            + "\n\nEscribe qué quieres que haga con él (p. ej. “revísalo, corrige los "
+              "errores y pasa los tests”) y lo hago. /export te devuelve el ZIP.")
+        return
+    # archivo suelto -> proyecto activo, reciente o nuevo
+    proj = await ensure_project(ctx, uid)
+    from security.path_guard import PathGuard, PathDenied
+    try:
+        target = PathGuard(Path(proj["path"])).resolve(name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        await message.answer(f"📄 Guardado como <b>{esc(name)}</b> "
+                             f"({fmt_bytes(len(data))}) en el proyecto "
+                             f"<b>{esc(proj['name'])}</b>.")
+    except PathDenied as e:
+        await message.answer(f"⛔ {esc(e)}")
     await ctx.store.audit(uid, "upload", f"{name} -> {proj['name']}")
 
 

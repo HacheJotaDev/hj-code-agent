@@ -112,12 +112,12 @@ async def cmd_price(message: Message, ctx, command: CommandObject = None):
         for r in rates:
             lines.append(f"• {esc(r['provider'])}/{esc(r['model'])}: in {r['input_per_mtok']} · "
                          f"out {r['output_per_mtok']} {r['currency']}")
-        lines.append("\nUso: /price set <modelo> <in> <out> [moneda] [cache_hit]")
+        lines.append("\nUso: /price set &lt;modelo&gt; &lt;in&gt; &lt;out&gt; [moneda] [cache_hit]")
         await message.answer("\n".join(lines))
         return
     parts = command.args.split()
     if parts[0].lower() != "set" or len(parts) < 4:
-        await message.answer("Uso: /price set <modelo> <in> <out> [moneda] [cache_hit]")
+        await message.answer("Uso: /price set &lt;modelo&gt; &lt;in&gt; &lt;out&gt; [moneda] [cache_hit]")
         return
     model, in_p, out_p = parts[1], parts[2], parts[3]
     currency = parts[4].upper() if len(parts) > 4 else "USD"
@@ -157,7 +157,7 @@ async def cmd_budget(message: Message, ctx, command: CommandObject = None):
         b = await ctx.store.get_budget(uid)
         await message.answer(f"💰 <b>Presupuesto</b>\nPor tarea: {b.get('per_task') or 'sin límite'}\n"
                              f"Por día: {b.get('per_day') or 'sin límite'}\n\n"
-                             "Uso: /budget task <monto> · /budget day <monto> · /budget off")
+                             "Uso: /budget task &lt;monto&gt; · /budget day &lt;monto&gt; · /budget off")
         return
     parts = command.args.split()
     try:
@@ -173,7 +173,7 @@ async def cmd_budget(message: Message, ctx, command: CommandObject = None):
         else:
             raise ValueError
     except (ValueError, IndexError):
-        await message.answer("Uso: /budget task <monto> · /budget day <monto> · /budget off")
+        await message.answer("Uso: /budget task &lt;monto&gt; · /budget day &lt;monto&gt; · /budget off")
 
 
 @router.message(Command("alerts"))
@@ -185,7 +185,7 @@ async def cmd_alerts(message: Message, ctx, command: CommandObject = None):
             "🔔 <b>Alertas</b>\n"
             f"Saldo bajo: {b.get('alert_balance') or 'desactivada'}\n"
             f"Coste diario máximo: {b.get('alert_daily') or 'desactivada'}\n\n"
-            "Uso: /alerts balance <monto> · /alerts daily <monto> · /alerts off")
+            "Uso: /alerts balance &lt;monto&gt; · /alerts daily &lt;monto&gt; · /alerts off")
         return
     parts = command.args.split()
     try:
@@ -201,11 +201,11 @@ async def cmd_alerts(message: Message, ctx, command: CommandObject = None):
         else:
             raise ValueError
     except (ValueError, IndexError):
-        await message.answer("Uso: /alerts balance <monto> · /alerts daily <monto> · /alerts off")
+        await message.answer("Uso: /alerts balance &lt;monto&gt; · /alerts daily &lt;monto&gt; · /alerts off")
 
 
-async def send_stats(message: Message, ctx):
-    uid = message.from_user.id
+async def send_stats(message: Message, ctx, uid: int | None = None):
+    uid = uid or message.from_user.id
     from core.billing.period import month_start
     t_all = await ctx.usage.totals(uid)
     t_month = await ctx.usage.totals(uid, since=month_start())

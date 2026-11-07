@@ -1,9 +1,7 @@
-"""Comandos basicos: start, help, menu, status, health, version, settings, cancel."""
+"""Comandos basicos V3: start, menu, help, status, health, version, settings, cancel."""
 from __future__ import annotations
 
-import asyncio
 import shutil
-import time
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -15,20 +13,20 @@ from .helpers import balance_line, provider_model
 
 router = Router(name="common")
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 
 
 def _menu_text(pname: str, model: str, proj_name: str | None, running: list, saldo: str) -> str:
     lines = [
-        "<b>HJ CODE AGENT V2</b>",
+        "<b>HJ CODE AGENT V3</b>",
         "🤖 Agente de programación",
         "",
-        f"🧠 Proveedor: <b>{esc(pname)}</b> · Modelo: <b>{esc(model)}</b>",
-        f"📁 Proyecto: <b>{esc(proj_name or '(ninguno)')}</b>",
+        f"🧠 Modelo: <b>{esc(model)}</b> vía <b>{esc(pname)}</b>",
+        f"📁 Proyecto: <b>{esc(proj_name or '(ninguno — envía un ZIP o escribe qué quieres)')}</b>",
         f"⚙️ Tarea en ejecución: <b>{', '.join(f'#{t}' for t in running) or 'ninguna'}</b>",
         f"💳 {saldo}",
         "",
-        "Elige una opción:",
+        "Escribe en lenguaje natural o elige una opción:",
     ]
     return "\n".join(lines)
 
@@ -36,25 +34,26 @@ def _menu_text(pname: str, model: str, proj_name: str | None, running: list, sal
 @router.message(CommandStart())
 async def cmd_start(message: Message, ctx):
     await message.answer(
-        "👋 <b>HJ CODE AGENT V2</b>\n\n"
-        "Agente de programación real: chat con IA, proyectos, sandbox aislado, "
-        "GitHub, saldo y consumo reales.\n\n"
-        "📌 Recuerda: <b>modo nativo</b> por defecto — sin system prompt oculto.\n"
-        "Escribe /help para ver todos los comandos.",
+        "👋 <b>HJ CODE AGENT V3</b>\n\n"
+        "Agente de programación: envíame un proyecto (ZIP) o escríbeme qué quieres "
+        "construir. Yo creo el workspace, programo, ejecuto y pruebo de verdad.\n\n"
+        "• Escribe en lenguaje natural — no necesitas comandos.\n"
+        "• <b>GitHub es opcional</b>: solo si me lo pides.\n"
+        "• Modo nativo: sin system prompt oculto.\n"
+        "• /help para ver todos los comandos.",
         reply_markup=main_menu_kb())
 
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message, ctx):
-    await _show_menu(message)
+    await _show_menu(message, message.from_user.id)
 
 
-async def _show_menu(message: Message):
-    user_id = message.from_user.id
-    pname, model = await provider_model(ctx, user_id)
-    proj = await ctx.projects.active(user_id)
-    running = ctx.queue.running_for_user(user_id) if ctx.queue else []
-    saldo = await balance_line(ctx, user_id)
+async def _show_menu(message: Message, uid: int):
+    pname, model = await provider_model(ctx, uid)
+    proj = await ctx.projects.active(uid)
+    running = ctx.queue.running_for_user(uid) if ctx.queue else []
+    saldo = await balance_line(ctx, uid)
     await message.answer(_menu_text(pname, model, proj["name"] if proj else None, running, saldo),
                          reply_markup=main_menu_kb())
 
@@ -67,7 +66,7 @@ async def cmd_help(message: Message, ctx):
 @router.message(Command("version"))
 async def cmd_version(message: Message, ctx):
     import core
-    await message.answer(f"HJ Code Agent <b>v{core.__version__}</b>\nPython runtime OK")
+    await message.answer(f"HJ Code Agent <b>v{esc(core.__version__)}</b>\nPython runtime OK")
 
 
 @router.message(Command("status"))
@@ -101,7 +100,7 @@ async def cmd_health(message: Message, ctx):
               "cola": "ok" if ctx.queue else "parada"}
     disk = shutil.disk_usage(ctx.settings.workspaces_dir)
     from core.sandbox.factory import docker_available
-    docker_ok = await docker_available()
+    docker_ok = await docker_available(ctx.settings)
     kind = ctx.settings.sandbox_backend
     up = ctx.uptime_s()
     await message.answer(
@@ -140,42 +139,50 @@ async def cb_noop(cb: CallbackQuery):
     await cb.answer()
 
 
+@router.callback_query(F.data == "menu")
+async def cb_menu_home(cb: CallbackQuery, ctx):
+    """Botones '⬅️ Volver' simples (callback_data='menu')."""
+    await cb.answer()
+    await _show_menu(cb.message, cb.from_user.id)
+
+
 @router.callback_query(F.data.startswith("menu:"))
 async def cb_menu(cb: CallbackQuery, ctx):
     await cb.answer()
     section = cb.data.split(":", 1)[1]
     msg = cb.message
+    uid = cb.from_user.id  # identidad REAL del usuario (no la del bot)
     if section == "chatinfo":
-        uid = cb.from_user.id
         pname, model = await provider_model(ctx, uid)
         await msg.answer(
             f"💬 <b>Chat con IA</b>\n\nEscribe directamente cualquier mensaje (sin barra) y "
             f"te respondo con <b>{esc(model)}</b> vía <b>{esc(pname)}</b>.\n\n"
-            "El modo es nativo: sin system prompt oculto.\n"
-            "Para tareas de código con herramientas usa <code>/run &lt;tarea&gt;</code>.")
+            "Si hay un proyecto activo y pides algo de código (crear, corregir, ejecutar "
+            "tests...), encolo una tarea del agente automáticamente.\n"
+            "Para forzarlo: <code>/run</code> + tu tarea.")
         return
     if section == "newproject":
-        await msg.answer("📁 Nuevo proyecto: envía <code>/newproject Nombre</code>")
+        await msg.answer("📁 Escribe el nombre del proyecto, o envía directamente un ZIP y lo creo yo.")
         return
     if section == "projects":
         from . import projects as pm
-        await pm.show_projects(msg, ctx)
+        await pm.show_projects(msg, ctx, uid=uid)
         return
     if section == "upload":
-        await msg.answer("📤 Subida: envía un archivo (.py, .txt, .zip...) como documento "
-                         "y quedará en el proyecto activo.")
+        await msg.answer("📤 Envía un archivo (.py, .zip...) como documento. Si es un ZIP creo el "
+                         "proyecto automáticamente; si hay uno activo, se añade a él.")
         return
     if section == "github":
         from . import github_cmds as gh
-        await gh.show_github_menu(msg, ctx)
+        await gh.show_github_menu(msg, ctx, uid=uid)
         return
     if section == "providers":
         from . import providers as pv
-        await pv.show_providers(msg, ctx)
+        await pv.show_providers(msg, ctx, uid=uid)
         return
     if section == "sysprompt":
         from . import system_prompt as sp
-        await sp.show_prompt_menu(msg, ctx)
+        await sp.show_prompt_menu(msg, ctx, uid=uid)
         return
     if section == "billing":
         await msg.answer("💳 <b>Saldo y tokens</b>\n/balance · /tokens · /usage · /cost · "
@@ -191,7 +198,7 @@ async def cb_menu(cb: CallbackQuery, ctx):
         return
     if section == "stats":
         from . import billing as bl
-        await bl.send_stats(msg, ctx)
+        await bl.send_stats(msg, ctx, uid=uid)
         return
     if section == "settings":
         from .common import cmd_settings  # evita ciclo
@@ -202,7 +209,7 @@ async def cb_menu(cb: CallbackQuery, ctx):
         return
 
 
-HELP_TEXT = """<b>📖 Comandos de HJ Code Agent V2</b>
+HELP_TEXT = """<b>📖 Comandos de HJ Code Agent V3</b>
 
 <b>General</b>
 /start · /menu · /help · /status · /health · /version · /settings · /cancel
@@ -217,8 +224,8 @@ HELP_TEXT = """<b>📖 Comandos de HJ Code Agent V2</b>
 /system clear · /system reset · /system export · /system import · /system project
 
 <b>Proveedores y modelos</b>
-/provider · /providers · /provider add · /provider select &lt;nombre&gt; · /provider remove &lt;nombre&gt;
-/setapi · /testapi · /models [refresh] · /model · /model info · /model select &lt;nombre&gt;
+/provider · /providers · /provider select &lt;nombre&gt; · /provider remove &lt;nombre&gt;
+/setapi · /testapi · /models [refresh] · /model · /model select &lt;nombre&gt;
 /temperature &lt;0-2&gt; · /top_p &lt;0-1&gt; · /max_tokens &lt;n&gt; · /context
 /stream on|off · /reasoning &lt;nivel&gt; · /params · /params reset · /price set &lt;modelo&gt; &lt;in&gt; &lt;out&gt; [moneda]
 
@@ -229,7 +236,7 @@ HELP_TEXT = """<b>📖 Comandos de HJ Code Agent V2</b>
 <b>Proyectos y archivos</b>
 /newproject &lt;nombre&gt; · /projects · /project select &lt;ref&gt; · /project info
 /project rename &lt;nombre&gt; · /project export · /project archive · /project delete
-/files [ruta] · /file read &lt;ruta&gt; · /file edit · /file download &lt;ruta&gt; · /upload
+/export (ZIP del proyecto activo) · /files [ruta] · /file read &lt;ruta&gt; · /file download &lt;ruta&gt;
 /workspace · /backup · /restore
 
 <b>Agente y tareas</b>
@@ -240,7 +247,7 @@ HELP_TEXT = """<b>📖 Comandos de HJ Code Agent V2</b>
 /terminal &lt;cmd&gt; · /install · /test · /build · /processes
 /sandbox status · /sandbox reset · /sandbox resources
 
-<b>GitHub</b>
+<b>GitHub (OPCIONAL — solo si lo pides)</b>
 /github · /github connect · /github status · /github disconnect
 /repo add &lt;url&gt; · /repo clone &lt;url&gt; [rama] · /repo info · /repos
 /branch [nombre] · /branches · /checkout &lt;rama&gt; · /gitstatus · /diff
@@ -248,7 +255,7 @@ HELP_TEXT = """<b>📖 Comandos de HJ Code Agent V2</b>
 /rollback &lt;archivo&gt; · /autopush on|off
 
 <b>Multiagente (opcional)</b>
-/agents · /agents on · /agents off · /agents add · /agents remove
+/agents · /agents on · /agents off · /agents add · /agents remove &lt;nombre&gt;
 /agents config · /agents status · /agents models
 
 <b>Administración</b>
@@ -256,6 +263,6 @@ HELP_TEXT = """<b>📖 Comandos de HJ Code Agent V2</b>
 /audit · /alerts · /notifications · /diagnostics · /config export · /config import
 
 <b>Notas</b>
-• Mensajes sin barra = chat directo con el modelo (modo nativo, sin prompt oculto).
-• /run ejecuta una tarea de código REAL con herramientas en el sandbox.
+• Mensajes sin barra = chat directo; con proyecto activo y intención de código,
+  se encola una tarea del agente automáticamente.
 • El push a GitHub SIEMPRE pide tu autorización con botones."""

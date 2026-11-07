@@ -50,9 +50,15 @@ async def cmd_agents(message: Message, ctx, command: CommandObject = None):
         await message.answer("➕ Nombre del perfil (ej: revisor):")
         return
     if arg == "remove":
+        parts = (command.args or "").split()
+        if len(parts) >= 2:
+            name = parts[1].strip()
+            await ctx.store.delete_agent(uid, name)
+            await message.answer(f"🗑 Perfil '{esc(name)}' eliminado. /agents status")
+            return
         profiles = await ctx.store.list_agents(uid)
         names = ", ".join(p["name"] for p in profiles) or "(ninguno)"
-        await message.answer(f"Uso: /agents remove <nombre>\nPerfiles: {names}")
+        await message.answer(f"Uso: /agents remove &lt;nombre&gt;\nPerfiles: {names}")
         return
     if arg == "status":
         await message.answer(await _status_text(ctx, uid))
@@ -67,7 +73,7 @@ async def cmd_agents(message: Message, ctx, command: CommandObject = None):
         await message.answer("\n".join(lines))
         return
     if arg == "config":
-        await message.answer("Para reconfigurar un perfil: /agents remove <nombre> y /agents add. "
+        await message.answer("Para reconfigurar un perfil: /agents remove &lt;nombre&gt; y /agents add. "
                              "Cada perfil pide nombre, rol, proveedor/modelo y prompt opcional.")
         return
     await message.answer(await _status_text(ctx, uid), reply_markup=agents_kb(
@@ -99,7 +105,7 @@ async def cb_agents_status(cb: CallbackQuery, ctx):
 @router.callback_query(F.data == "agents:config")
 async def cb_agents_config(cb: CallbackQuery, ctx):
     await cb.answer()
-    await cb.message.answer("Reconfigurar: /agents remove <nombre> + /agents add")
+    await cb.message.answer("Reconfigurar: /agents remove &lt;nombre&gt; + /agents add")
 
 
 @router.callback_query(F.data == "agents:remove")
@@ -107,10 +113,10 @@ async def cb_agents_remove(cb: CallbackQuery, ctx):
     await cb.answer()
     profiles = await ctx.store.list_agents(cb.from_user.id)
     names = ", ".join(p["name"] for p in profiles) or "(ninguno)"
-    await cb.message.answer(f"Uso: /agents remove <nombre>\nPerfiles: {names}")
+    await cb.message.answer(f"Uso: /agents remove &lt;nombre&gt;\nPerfiles: {names}")
 
 
-@router.message(AgentsStates.waiting_name, F.text)
+@router.message(AgentsStates.waiting_name, F.text & ~F.text.startswith("/"))
 async def ag_name(message: Message, ctx, state: FSMContext):
     name = message.text.strip()[:24]
     await state.update_data(name=name)
@@ -118,14 +124,14 @@ async def ag_name(message: Message, ctx, state: FSMContext):
     await message.answer(f"Rol de '{esc(name)}' ({ROLE_HINTS}):")
 
 
-@router.message(AgentsStates.waiting_role, F.text)
+@router.message(AgentsStates.waiting_role, F.text & ~F.text.startswith("/"))
 async def ag_role(message: Message, ctx, state: FSMContext):
     await state.update_data(role=message.text.strip()[:24])
     await state.set_state(AgentsStates.waiting_model)
     await message.answer("Proveedor/modelo (formato proveedor:modelo, vacío = usar el activo):")
 
 
-@router.message(AgentsStates.waiting_model, F.text)
+@router.message(AgentsStates.waiting_model, F.text & ~F.text.startswith("/"))
 async def ag_model(message: Message, ctx, state: FSMContext):
     txt = message.text.strip()
     provider = model = None
@@ -137,7 +143,7 @@ async def ag_model(message: Message, ctx, state: FSMContext):
                          "vacío = sin prompt, modo nativo):")
 
 
-@router.message(AgentsStates.waiting_prompt, F.text)
+@router.message(AgentsStates.waiting_prompt, F.text & ~F.text.startswith("/"))
 async def ag_prompt(message: Message, ctx, state: FSMContext):
     data = await state.get_data()
     prompt = None if message.text.strip().lower() in ("-", "no", "") else message.text.strip()

@@ -337,8 +337,36 @@ class Store:
             f"SELECT * FROM tasks {where} ORDER BY id DESC LIMIT ?", (*vals, limit))]
 
     async def next_queued(self) -> dict | None:
+        """Vistazo (sin reclamar): para comprobar la ocupacion del usuario."""
         return _rowdict(await self.db.one(
             "SELECT * FROM tasks WHERE status='queued' ORDER BY id LIMIT 1"))
+
+    async def claim_next_queued(self) -> dict | None:
+        """Reclama atomicamente la siguiente tarea en cola.
+
+        UPDATE ... WHERE id=(SELECT ...) RETURNING *: solo UN worker obtiene la
+        fila aunque haya varios compitiendo (evita la ejecucion duplicada).
+        """
+        async with self.db.lock:
+            cur = await self.db.conn.execute(
+                """UPDATE tasks SET status='running',
+                     started_at=COALESCE(started_at, ?)
+                   WHERE id=(SELECT id FROM tasks WHERE status='queued' ORDER BY id LIMIT 1)
+                     AND status='queued'
+                   RETURNING *""",
+                (now(),))
+            row = await cur.fetchone()
+            await self.db.conn.commit()
+            await cur.close()
+        if not row:
+            return None
+        row = dict(row)
+        if row.get("params"):
+            try:
+                row["params"] = json.loads(row["params"])
+            except (json.JSONDecodeError, TypeError):
+                row["params"] = None
+        return row
 
     async def recover_interrupted(self) -> int:
         cur = await self.db.one("SELECT COUNT(*) AS n FROM tasks WHERE status='running'")

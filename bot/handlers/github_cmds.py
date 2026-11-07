@@ -25,10 +25,10 @@ async def gh_token_getter(ctx, user_id: int):
     return _get
 
 
-async def show_github_menu(message: Message, ctx):
-    uid = message.from_user.id
+async def show_github_menu(message: Message, ctx, uid: int | None = None):
+    uid = uid or message.from_user.id
     blob = await ctx.store.get_credential(uid, "github")
-    await message.answer("🐙 <b>GitHub</b>\nEl token nunca entra en el sandbox de código: "
+    await message.answer("🐙 <b>GitHub (opcional)</b>\nEl token nunca entra en el sandbox de código: "
                          "las operaciones remotas pasan por el broker.",
                          reply_markup=github_kb(bool(blob)))
 
@@ -50,8 +50,8 @@ async def cmd_github(message: Message, ctx, command: CommandObject = None):
     await show_github_menu(message, ctx)
 
 
-async def _connect(message: Message, ctx):
-    uid = message.from_user.id
+async def _connect(message: Message, ctx, uid: int | None = None):
+    uid = uid or message.from_user.id
     token = ctx.store.new_token()
     await ctx.store.kv_set(f"form:{token}", {"kind": "github_token", "user_id": uid}, ttl_s=600)
     base = ctx.settings.form_base_url.rstrip("/") or f"http://{ctx.settings.form_host}:{ctx.settings.form_port}"
@@ -66,8 +66,8 @@ async def _connect(message: Message, ctx):
         "El token se guarda CIFRADO y jamás se muestra de nuevo ni entra en los sandboxes.")
 
 
-async def _status(message: Message, ctx):
-    uid = message.from_user.id
+async def _status(message: Message, ctx, uid: int | None = None):
+    uid = uid or message.from_user.id
     get = await gh_token_getter(ctx, uid)
     token = await get()
     if not token:
@@ -130,10 +130,10 @@ async def cmd_repo(message: Message, ctx, command: CommandObject = None, state: 
         await message.answer("Para cambiar de proyecto: /project select. "
                              "Un proyecto = un repositorio.")
     else:
-        await message.answer("Uso: /repo add <url> · /repo clone [url|rama] · /repo info")
+        await message.answer("Uso: /repo add &lt;url&gt; · /repo clone [url|rama] · /repo info")
 
 
-@router.message(RepoStates.waiting_url, F.text)
+@router.message(RepoStates.waiting_url, F.text & ~F.text.startswith("/"))
 async def on_repo_url(message: Message, ctx, state: FSMContext):
     await state.clear()
     proj = await ctx.projects.active(message.from_user.id)
@@ -168,7 +168,7 @@ async def cmd_branch(message: Message, ctx, command: CommandObject = None):
     name = (command.args or "").strip() if command else ""
     import re as _re
     if not name:
-        await message.answer("Uso: /branch <nombre> para crear y cambiar; "
+        await message.answer("Uso: /branch &lt;nombre&gt; para crear y cambiar; "
                              "/branches para listar")
         return
     if not _re.fullmatch(r"[A-Za-z0-9._/-]{1,80}", name) or ".." in name:
@@ -192,6 +192,14 @@ async def cmd_branches(message: Message, ctx):
     proj = await get_project(ctx, message)
     if not proj:
         return
+    await _branches_for(message, ctx, message.from_user.id)
+
+
+async def _branches_for(message: Message, ctx, uid: int):
+    proj = await ctx.projects.active(uid)
+    if not proj:
+        await message.answer("📁 No hay proyecto activo.")
+        return
     code, out = await _git_host(proj["path"], "branch", "-a")
     await message.answer(f"🌿 <pre>{esc(out or '(sin ramas)')}</pre>")
 
@@ -203,7 +211,7 @@ async def cmd_checkout(message: Message, ctx, command: CommandObject = None):
         return
     name = (command.args or "").strip() if command else ""
     if not name:
-        await message.answer("Uso: /checkout <rama>")
+        await message.answer("Uso: /checkout &lt;rama&gt;")
         return
     code, out = await _git_host(proj["path"], "checkout", name)
     if code == 0:
@@ -238,7 +246,7 @@ async def cmd_commit(message: Message, ctx, command: CommandObject = None):
         return
     msg = (command.args or "").strip() if command else ""
     if not msg:
-        await message.answer("Uso: /commit <mensaje>")
+        await message.answer("Uso: /commit &lt;mensaje&gt;")
         return
     await _git_host(proj["path"], "add", "-A")
     code, out = await _git_host(proj["path"], "commit", "-m", msg)
@@ -262,7 +270,7 @@ async def cmd_rollback(message: Message, ctx, command: CommandObject = None):
         return
     path = (command.args or "").strip() if command else ""
     if not path:
-        await message.answer("Uso: /rollback <archivo>  (restaura desde HEAD)")
+        await message.answer("Uso: /rollback &lt;archivo&gt;  (restaura desde HEAD)")
         return
     code, out = await _git_host(proj["path"], "checkout", "--", path)
     await message.answer(f"↩️ <pre>{esc(out[:400] or f'{path} restaurado desde HEAD')}</pre>")
@@ -291,7 +299,9 @@ async def cmd_push(message: Message, ctx, command: CommandObject = None):
     await _request_push(message, ctx, proj, branch)
 
 
-async def _request_push(message: Message, ctx, proj: dict, branch: str | None):
+async def _request_push(message: Message, ctx, proj: dict, branch: str | None,
+                        uid: int | None = None):
+    uid = uid or message.from_user.id
     branch = branch or await ctx.broker.current_branch(proj) or "main"
     git = await ctx.store.get_git_state(proj["id"])
     if not git.get("repo_url"):
@@ -301,7 +311,7 @@ async def _request_push(message: Message, ctx, proj: dict, branch: str | None):
     req_id = f"push-{token_req[:10]}"
     await ctx.store.kv_set(f"pushreq:{req_id}",
                            {"project_id": proj["id"], "branch": branch,
-                            "user_id": message.from_user.id}, ttl_s=600)
+                            "user_id": uid}, ttl_s=600)
     from ..keyboards import approval_kb
     await message.answer(
         f"🔐 <b>Autorización de push</b>\nProyecto: {esc(proj['name'])}\n"
@@ -401,13 +411,13 @@ async def cmd_autopush(message: Message, ctx, command: CommandObject = None):
 @router.callback_query(F.data == "gh:connect")
 async def cb_gh_connect(cb: CallbackQuery, ctx):
     await cb.answer()
-    await _connect(cb.message, ctx)
+    await _connect(cb.message, ctx, cb.from_user.id)
 
 
 @router.callback_query(F.data == "gh:status")
 async def cb_gh_status(cb: CallbackQuery, ctx):
     await cb.answer()
-    await _status(cb.message, ctx)
+    await _status(cb.message, ctx, cb.from_user.id)
 
 
 @router.callback_query(F.data == "gh:repoadd")
@@ -425,31 +435,54 @@ async def cb_gh_clone(cb: CallbackQuery, ctx):
 @router.callback_query(F.data == "gh:branches")
 async def cb_gh_branches(cb: CallbackQuery, ctx):
     await cb.answer()
-    await cmd_branches(cb.message, ctx)
+    await _branches_for(cb, ctx, cb.from_user.id)
 
 
 @router.callback_query(F.data == "gh:history")
 async def cb_gh_history(cb: CallbackQuery, ctx):
     await cb.answer()
-    await cmd_history_git(cb.message, ctx)
+    proj = await ctx.projects.active(cb.from_user.id)
+    if proj:
+        code, out = await _git_host(proj["path"], "log", "--oneline", "-15")
+        await cb.message.answer(f"📜 <pre>{esc(out or '(sin commits)')}</pre>")
+    else:
+        await cb.message.answer("📁 No hay proyecto activo.")
 
 
 @router.callback_query(F.data == "gh:push")
 async def cb_gh_push(cb: CallbackQuery, ctx):
     await cb.answer()
-    await cmd_push(cb.message, ctx)
+    proj = await ctx.projects.active(cb.from_user.id)
+    if not proj:
+        await cb.message.answer("📁 No hay proyecto activo.")
+        return
+    await _request_push(cb.message, ctx, proj, None, uid=cb.from_user.id)
 
 
 @router.callback_query(F.data == "gh:pull")
 async def cb_gh_pull(cb: CallbackQuery, ctx):
     await cb.answer()
-    await cmd_pull(cb.message, ctx)
+    proj = await ctx.projects.active(cb.from_user.id)
+    if not proj:
+        await cb.message.answer("📁 No hay proyecto activo.")
+        return
+    try:
+        msg = await ctx.broker.pull(proj)
+        await cb.message.answer(f"⬇️ {esc(msg)}")
+    except Exception as e:
+        await cb.message.answer(f"❌ {esc(e)[:400]}")
 
 
 @router.callback_query(F.data == "gh:autopush")
 async def cb_gh_autopush(cb: CallbackQuery, ctx):
     await cb.answer()
-    await cmd_autopush(cb.message, ctx)
+    proj = await ctx.projects.active(cb.from_user.id)
+    if not proj:
+        await cb.message.answer("📁 No hay proyecto activo.")
+        return
+    git = await ctx.store.get_git_state(proj["id"])
+    await cb.message.answer(f"🚀 Auto-push: {'ON' if git.get('autopush') else 'OFF (por defecto)'}\n"
+                            "Uso: /autopush on|off (limitado a ramas autorizadas)")
 
 
 @router.callback_query(F.data == "gh:disconnect")

@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import os
 import shlex
 import time
 import uuid
@@ -27,7 +27,8 @@ class DockerSandbox(Sandbox):
                  image: str = "python:3.12-slim", container_name: str | None = None,
                  memory_mb: int = 512, cpus: float = 1.0, pids: int = 128,
                  timeout_s: int = 120, network: bool = True, docker_network: str = "",
-                 host_workspace: str | None = None, disk_mb: int = 512):
+                 host_workspace: str | None = None, disk_mb: int = 512,
+                 docker_env: dict[str, str] | None = None):
         super().__init__(workspace, project_id=project_id)
         self.image = image
         self.container = container_name or f"hj-sbx-{project_id or uuid.uuid4().hex[:10]}"
@@ -37,15 +38,17 @@ class DockerSandbox(Sandbox):
         self.timeout_s = timeout_s
         self.network = network
         self.docker_network = docker_network
+        self.docker_env = dict(docker_env or {})  # ej: DOCKER_HOST rootless
         self.host_workspace = host_workspace or str(self.workspace)
         self.disk_mb = disk_mb
         self._ready = False
 
     # ---------------- docker helpers ----------------
     async def _run(self, *args: str, timeout: int = 120, input_text: str | None = None) -> ExecResult:
+        env = {**os.environ, **self.docker_env} if self.docker_env else None
         proc = await asyncio.create_subprocess_exec(
             "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE if input_text is not None else None)
+            stdin=asyncio.subprocess.PIPE if input_text is not None else None, env=env)
         try:
             out, err = await asyncio.wait_for(
                 proc.communicate(input_text.encode() if input_text is not None else None),
@@ -129,8 +132,10 @@ class DockerSandbox(Sandbox):
         args += [self.container, "sh", "-lc",
                  f"exec timeout -s KILL {int(timeout)} {cmd}"]
         start = time.monotonic()
+        env = {**os.environ, **self.docker_env} if self.docker_env else None
         proc = await asyncio.create_subprocess_exec(
-            "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=env)
         self.processes[key] = ProcessInfo(pid=proc.pid, command=cmd[:200],
                                           started_at=time.time(), container=self.container,
                                           project_id=self.project_id, task_id=task_id)

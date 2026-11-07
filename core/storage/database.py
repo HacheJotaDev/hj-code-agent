@@ -62,6 +62,10 @@ class Database:
             await self.conn.commit()
             return cur.lastrowid
 
+    @property
+    def lock(self) -> asyncio.Lock:
+        return self._lock
+
     # --- migraciones -------------------------------------------------------
     async def migrate(self) -> int:
         applied = 0
