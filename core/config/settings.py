@@ -130,9 +130,10 @@ class Settings(BaseSettings):
         if self.log_file:
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    def workspace_host_path(self) -> str:
-        """Ruta de workspaces tal y como la ve el demonio Docker del host."""
-        return self.workspaces_host_dir or str(self.workspaces_dir)
+    # NOTA: la traduccion de rutas para el sandbox Docker vive en
+    # core/sandbox/factory.py::resolve_host_workspace, que aplica
+    # workspaces_host_dir a la subruta EXACTA del proyecto (nunca a la raiz
+    # general de workspaces: cada sandbox monta solo su propio proyecto).
 
 
 def load_settings(env_file: str | os.PathLike | None = None) -> Settings:

@@ -15,10 +15,18 @@ modelo puede conceder permisos**.
    fuente es `core/prompts/service.py`; hay pruebas que lo verifican.
 3. **Sandbox de ejecución**:
    - `docker`: contenedor por proyecto, `--cap-drop ALL`, `no-new-privileges`,
-     usuario 1000, límites de memoria/CPU/pids/fsize, timeout per-command,
-     solo monta el workspace. Sin socket Docker, sin credenciales, sin acceso a
-     la base de datos. Red configurable (`HJ_SANDBOX_NETWORK=0` o red dedicada
-     `HJ_DOCKER_NETWORK`). Recomendado: **Docker rootless** en el host.
+     usuario 1000, límites de memoria/CPU/pids/fsize, timeout per-command.
+     **Montaje exclusivo del workspace de ese proyecto** (`resolve_host_workspace`):
+     nunca la raíz general de workspaces ni los proyectos de otros usuarios;
+     el `chown` interno solo actúa si 1000:1000 no puede escribir y, al ser el
+     montaje individual, solo afecta a los archivos de ese proyecto.
+     Sin credenciales, sin acceso a la base de datos. Red configurable
+     (`HJ_SANDBOX_NETWORK=0` o red dedicada `HJ_DOCKER_NETWORK`).
+     **OBLIGATORIO `HJ_DOCKER_HOST` rootless**: si no está definido, la fábrica
+     no invoca docker en absoluto (no existe ruta de código que derive al daemon
+     principal del host); si apunta a `/var/run/docker.sock` o `/run/docker.sock`
+     se rechaza explícitamente. Sin sandbox aislado -> `ExecutionUnavailable`
+     y el usuario recibe un aviso claro (nunca fallback silencioso).
    - `local` (solo desarrollo): `setrlimit` (AS/CPU/NPROC/FSIZE), sesiones de
      proceso propias, kill por grupo. **ADVERTENCIA honesta**: comparte usuario
      y kernel con el host; no garantiza aislamiento frente a código malicioso.

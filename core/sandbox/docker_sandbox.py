@@ -107,9 +107,17 @@ class DockerSandbox(Sandbox):
                                   "sh", "-lc", "umask 077; exec sleep infinity", timeout=120)
             if res.exit_code != 0:
                 raise SandboxError(f"No se pudo crear el contenedor: {res.stderr[:300]}")
-            # Directorios del workspace usables por el usuario 1000
-            await self._run("exec", "-u", "0:0", self.container, "sh", "-lc",
-                            f"chown -R 1000:1000 /workspace 2>/dev/null || true", timeout=60)
+            # El montaje es EXCLUSIVO de este proyecto (factory.
+            # resolve_host_workspace), asi que cualquier ajuste de permisos solo
+            # puede afectar a los archivos de ESTE workspace. Aun asi, el chown
+            # es de ultima instancia: primero comprobamos si 1000:1000 ya puede
+            # escribir (caso habitual rootless) para no tocar nada.
+            can_write = await self._run("exec", "-u", "1000:1000", self.container,
+                                        "sh", "-lc", "test -w /workspace", timeout=30)
+            if can_write.exit_code != 0:
+                await self._run("exec", "-u", "0:0", self.container, "sh", "-lc",
+                                "chown -R 1000:1000 /workspace 2>/dev/null || true",
+                                timeout=60)
             self._ready = True
         except FileNotFoundError:
             raise SandboxError("Docker no esta disponible en el host")

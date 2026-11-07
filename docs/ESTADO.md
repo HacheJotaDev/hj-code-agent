@@ -56,9 +56,21 @@ Leyenda: ✅ implementado · 🧪 implementado + prueba automatizada · ⏳ pend
 
 ## Resultados de la suite V3 (noviembre 2026)
 
-**146 pruebas automatizadas: 145 pasan, 0 fallan, 1 omitida.**
+**160 pruebas automatizadas: 159 pasan, 0 fallan, 1 omitida.**
 La omitida es `tests/test_sandbox_docker.py` (requiere un daemon Docker real;
 este entorno de CI no lo tiene — se valida en el VPS).
+
+### Revisión del VPS (bugs 1-4 de la segunda auditoría) — `tests/test_update_safety.py`
+
+14 pruebas nuevas. **Verificación doble: con el código antiguo fallan 10/14
+(los bugs reales); con el actual pasan 14/14.**
+
+| Bug | Corrección | Prueba |
+|---|---|---|
+| 1. update.sh forzaba usuario `hjagent` (el servicio real corre como `hjcode`) → riesgo de perder acceso a SQLite/boveda/proyectos | Detecta el usuario EFECTIVO con `systemctl show -p User`; sin usuario no-root no toca permisos; chown solo si el propietario difiere; no crea usuarios; rollback restaura propietarios originales | 🧪 4 tests |
+| 2. Sin `HJ_DOCKER_HOST` la CLI docker caía en el daemon PRINCIPAL del host | La fábrica no invoca docker sin host rootless autorizado; sockets `/var/run/docker.sock` y `/run/docker.sock` rechazados; defensa en profundidad en `sandbox_kind` | 🧪 4 tests |
+| 3. El sandbox montaba la raíz GENERAL de workspaces (todos los proyectos) | `resolve_host_workspace()` devuelve el workspace EXACTO del proyecto (con traducción de ruta opcional conservando la subruta); `chown` interno solo si 1000:1000 no puede escribir | 🧪 4 tests |
+| 4. Backup de SQLite con el bot escribiendo + rollback sin restaurar datos/permisos | Stop ANTES del backup → checkpoint WAL (`scripts/db_tools.py`) → integrity_check → tar; rollback completo (código, deps, datos, .env, propietarios, servicio) con rollback en cada paso destructivo | 🧪 2 tests + 4 de script |
 
 ### Pruebas 1-14 del encargo (integración con dispatcher REAL de aiogram)
 `tests/test_v3_flows.py`: **14/14 pasan**. Simulan updates de Telegram

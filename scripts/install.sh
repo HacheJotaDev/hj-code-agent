@@ -20,7 +20,11 @@ PYV=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' || die "Se necesita Python >= 3.11 (encontrado $PYV)"
 command -v git >/dev/null || die "git no encontrado"
 if command -v docker >/dev/null; then docker info >/dev/null 2>&1 && DOCKER_OK=1 || DOCKER_OK=0; else DOCKER_OK=0; fi
-echo "Python $PYV · Docker: $([ "$DOCKER_OK" = 1 ] && echo disponible || echo NO (sandbox local, menor aislamiento))"
+if [ "$DOCKER_OK" = 1 ]; then
+  echo "Python $PYV · Docker: disponible"
+else
+  echo "Python $PYV · Docker: NO (sandbox local, menor aislamiento)"
+fi
 ok "Dependencias base"
 
 step "2/7 Creando directorios"
