@@ -33,6 +33,48 @@ actualización conserva `.env`, base de datos, clave maestra, vault cifrado
    rearranca el servicio. Cada paso destructivo (rsync, pip, migraciones,
    arranque) invoca rollback automáticamente.
 
+## El bot nunca queda detenido por un fallo previo (nuevo en esta revisión)
+
+Cualquier fallo **después de `systemctl stop`** reinicia automáticamente el
+servicio con la versión anterior:
+
+- `checkpoint WAL`, `integrity_check`, cualquiera de los tres `tar` del
+  backup, o cualquier otro error no gestionado (red de seguridad con
+  `trap ERR` + `set -E`) → **rollback y arranque del servicio anterior**.
+- Antes: un `tar` fallido dejaba el bot PARADO (`die()` y `set -e` no
+  reiniciaban nada). Los tests e2e (`tests/test_update_e2e.py`) reproducen
+  estos fallos de verdad y verifican que el servicio vuelve a arrancar.
+
+## Migraciones parciales: la BD se restaura (nuevo en esta revisión)
+
+- `MIGRATED=1` se activa **ANTES** de ejecutar `db.migrate()` (antes se
+  marcaba al final): si una migración aplica cambios y la siguiente explota,
+  el rollback **restaura la base de datos previa** desde el backup tomado
+  tras el checkpoint WAL (sin `-wal`/`-shm` residuales de la migración a
+  medias).
+- Además hay **verificación de integridad POST-migración**: si la BD queda
+  mal, rollback completo.
+- Corregido también un cuelgue real: si `db.migrate()` lanzaba una excepción,
+  la conexión aiosqlite no se cerraba y el hilo no-daemon dejaba el proceso
+  **colgado para siempre** (el rollback jamás llegaba a ejecutarse).
+
+## HJ_DB_PATH se respeta (nuevo en esta revisión)
+
+Si tu instalación usa una ruta de base de datos distinta de la predeterminada,
+el actualizador la detecta con el MISMO orden que usa el bot
+(`core/config/settings.py`):
+
+1. `HJ_DB_PATH` en el entorno con el que ejecutas `update.sh`;
+2. `Environment="HJ_DB_PATH=..."` de la unidad systemd y sus drop-ins;
+3. `HJ_DB_PATH=...` en el `.env` de la instalación (escrito por `scripts/setup.py`);
+4. por defecto: `$BASE_DIR/data/hj.db`.
+
+El checkpoint, `integrity_check`, backup, migraciones y restauración se
+aplican a ESA ruta, aunque sea externa a `data/` (se copia además el fichero
+de BD a `backups/update-<fecha>/db/` para poder restaurarlo por separado).
+Antes: el actualizador ignoraba `HJ_DB_PATH` y migraba/comprobaba
+`data/hj.db` aunque el bot usara otra base.
+
 ## Pasos
 
 ```bash
@@ -46,12 +88,15 @@ git clone https://github.com/HacheJotaDev/hj-code-agent /tmp/hj-v3
 sudo bash /tmp/hj-v3/scripts/update.sh /tmp/hj-v3
 ```
 
-El script hace, en orden: detecta versión y cambios locales → backup completo
-(`.env` + `data/` + `workspaces/` + código anterior) → detiene únicamente
-`hj-code-agent` → copia el código nuevo (sin tocar datos) → `pip install` +
-migraciones idempotentes → crea usuario sin privilegios `hjagent` si falta →
-arranca y comprueba salud → **rollback automático** si algo falla (restaura el
-código anterior y rearranca; `.env` y datos nunca se tocan).
+El script hace, en orden: detecta versión, usuario efectivo del servicio y
+cambios locales → **detiene únicamente `hj-code-agent`** → checkpoint WAL +
+integridad + backup completo (`.env` + fichero de BD + `data/` +
+`workspaces/` + código anterior) → copia el código nuevo (sin tocar datos) →
+`pip install` + migraciones idempotentes con verificación posterior →
+permisos solo si divergen del usuario real del servicio (jamás crea
+usuarios) → arranca y comprueba salud → **rollback automático con el
+servicio en marcha** si algo falla (código, dependencias, datos, `.env` y
+propietarios).
 
 ## Verificación post-actualización (en Telegram, con tu admin ID)
 
@@ -108,6 +153,9 @@ sudo cp -a /opt/hj-code-agent/backups/update-<fecha>/.env /opt/hj-code-agent/app
 sudo /opt/hj-code-agent/venv/bin/pip install -e /opt/hj-code-agent/app
 # si las migraciones escribieron en la BD, restaura también los datos:
 sudo tar -xzf /opt/hj-code-agent/backups/update-<fecha>/data.tar.gz -C /opt/hj-code-agent
+# si usas HJ_DB_PATH externa a data/, restaura además el fichero de BD:
+sudo rm -f <tu-HJ_DB_PATH> <tu-HJ_DB_PATH>-wal <tu-HJ_DB_PATH>-shm
+sudo cp -a /opt/hj-code-agent/backups/update-<fecha>/db/dbfile <tu-HJ_DB_PATH>
 # y conserva el usuario de tu servicio (ejemplo hjcode):
 sudo chown -R hjcode:hjcode /opt/hj-code-agent/data /opt/hj-code-agent/workspaces
 sudo systemctl start hj-code-agent

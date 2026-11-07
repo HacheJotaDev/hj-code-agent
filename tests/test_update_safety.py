@@ -241,3 +241,64 @@ def test_update_rollback_restaura_codigo_datos_y_permisos():
     for step_call in ('|| rollback "rsync del codigo nuevo"', '|| rollback "pip install"',
                       '|| rollback "migraciones"', "|| rollback \"systemctl start\""):
         assert step_call in script
+
+
+# ============= Revision final: fallos tras stop y migraciones parciales ======
+
+
+def test_update_nunca_deja_el_servicio_parado_por_un_fallo_previo():
+    """Tras systemctl stop, TODO fallo debe reiniciar el servicio: trap ERR de
+    red de seguridad + rollback en cada paso del backup (antes, die() y el
+    set -e dejaban el bot PARADO si fallaba tar/checkpoint/el backup)."""
+    script = _script()
+    stop = script.index('systemctl stop "$SERVICE"')
+    assert "set -Eeuo pipefail" in script          # -E: el trap ERR entra en funciones
+    trap_idx = script.index("trap 'emergencia", stop)
+    assert trap_idx < script.index('step "3/8')    # red armada ANTES del backup
+    # y la red de seguridad existe junto al rollback (ambos tras el stop)
+    assert script.index("rollback() {", stop) > trap_idx
+    # el tar de data ya no usa die() tras el stop
+    assert 'tar -czf "$BACKUP_DIR/data.tar.gz" -C "$BASE_DIR" data || die' not in script
+    assert 'tar -czf "$BACKUP_DIR/data.tar.gz" -C "$BASE_DIR" data || rollback' in script
+    # checkpoint fallido tambien aborta con rollback (antes: aviso y seguir)
+    assert 'rollback "checkpoint' in script
+    for frag in ('|| rollback "backup tar de workspaces/"',
+                 '|| rollback "backup tar del codigo anterior"'):
+        assert frag in script, frag
+    # el handler de emergencia arranca el servicio y sale en error
+    handler = script[trap_idx:script.index('step "3/8')]
+    assert "systemctl start" in handler
+    assert "exit 1" in handler
+
+
+def test_update_marca_migracion_antes_de_ejecutarla():
+    """MIGRATED=1 se activa ANTES de db.migrate(): si la migracion aplica
+    cambios parciales y falla, el rollback restaura la BD previa (antes se
+    marcaba al final y el fallo parcial dejaba datos modificados)."""
+    script = _script()
+    assert script.index("MIGRATED=1") < script.index("await db.migrate()")
+    rb = script[script.index("rollback() {"):]
+    # restauracion fiel del fichero de BD, eliminando -wal/-shm residuales
+    assert 'rm -f "$DB_PATH" "$DB_PATH-wal" "$DB_PATH-shm"' in rb
+    assert 'cp -a "$BACKUP_DIR/db/dbfile" "$DB_PATH"' in rb
+    # la copia fiel de la BD se toma en el backup (tras checkpoint, servicio parado)
+    assert 'cp -a "$DB_PATH" "$BACKUP_DIR/db/dbfile"' in script
+    # verificacion de integridad POST-migracion con rollback si falla
+    assert 'rollback "integridad perdida tras migrar"' in script
+    # el heredoc cierra SIEMPRE la conexion (el hilo no-daemon de aiosqlite
+    # cuelga el proceso si migrate() explota sin cerrar: rollback jamas corre)
+    heredoc = script[script.index("from core.storage.database import Database"):script.rindex("PYEOF")]
+    assert "finally:" in heredoc and "await db.close()" in heredoc
+
+
+def test_update_respeta_hj_db_path():
+    """La ruta de la BD se resuelve como la ve el bot: entorno de update.sh >
+    Environment= de la unidad systemd > HJ_DB_PATH del .env > data/hj.db."""
+    script = _script()
+    assert 'DB_PATH="${HJ_DB_PATH:-}"' in script                       # 1. entorno
+    assert "Environment=" in script and "HJ_DB_PATH" in script         # 2. unidad
+    assert "HJ_DB_PATH=" in script                                     # 3. .env
+    assert 'DB_PATH="$BASE_DIR/data/hj.db"' in script                  # 4. default
+    # checkpoint, integridad, migracion y verificacion post usan la ruta RESUELTA
+    for frag in ('"$DB_PATH" checkpoint', '"$DB_PATH" integrity', 'HJ_DATA_DB="$DB_PATH"'):
+        assert frag in script, frag

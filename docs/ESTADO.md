@@ -56,7 +56,7 @@ Leyenda: ✅ implementado · 🧪 implementado + prueba automatizada · ⏳ pend
 
 ## Resultados de la suite V3 (noviembre 2026)
 
-**160 pruebas automatizadas: 159 pasan, 0 fallan, 1 omitida.**
+**169 pruebas automatizadas: 168 pasan, 0 fallan, 1 omitida.**
 La omitida es `tests/test_sandbox_docker.py` (requiere un daemon Docker real;
 este entorno de CI no lo tiene — se valida en el VPS).
 
@@ -71,6 +71,25 @@ este entorno de CI no lo tiene — se valida en el VPS).
 | 2. Sin `HJ_DOCKER_HOST` la CLI docker caía en el daemon PRINCIPAL del host | La fábrica no invoca docker sin host rootless autorizado; sockets `/var/run/docker.sock` y `/run/docker.sock` rechazados; defensa en profundidad en `sandbox_kind` | 🧪 4 tests |
 | 3. El sandbox montaba la raíz GENERAL de workspaces (todos los proyectos) | `resolve_host_workspace()` devuelve el workspace EXACTO del proyecto (con traducción de ruta opcional conservando la subruta); `chown` interno solo si 1000:1000 no puede escribir | 🧪 4 tests |
 | 4. Backup de SQLite con el bot escribiendo + rollback sin restaurar datos/permisos | Stop ANTES del backup → checkpoint WAL (`scripts/db_tools.py`) → integrity_check → tar; rollback completo (código, deps, datos, .env, propietarios, servicio) con rollback en cada paso destructivo | 🧪 2 tests + 4 de script |
+
+### Revisión final del actualizador (fallo tras stop, migración parcial, HJ_DB_PATH)
+
+Nueve pruebas nuevas (6 e2e + 3 estáticas). **Verificación doble: con el
+script antiguo fallan 5/5 rápidas y la sexta SE CUELGA (bug real de
+producción); con el actual pasan 9/9.**
+
+| Fallo | Corrección | Prueba |
+|---|---|---|
+| Un `tar`/`checkpoint` fallido tras `systemctl stop` dejaba el bot PARADO (`die()` y `set -e` sin reiniciar) | `trap ERR` + `set -E` como red de seguridad y `\|\| rollback` en checkpoint, integridad y los tres tars del backup: el servicio anterior SIEMPRE rearraanca | 🧪 2 e2e + 1 estática |
+| `MIGRATED=1` se marcaba AL FINAL: una migración parcial dejaba datos modificados sin restaurar | `MIGRATED=1` ANTES de `db.migrate()`; copia fiel de la BD (sin `-wal`/`-shm`) en el backup; restauración exacta por swap con conservación de la data descartada; integridad POST-migración | 🧪 2 e2e + 1 estática |
+| Cuelgue real: si `db.migrate()` explotaba, la conexión aiosqlite sin cerrar dejaba el proceso COLGADO (hilo no-daemon) y el rollback jamás corría | El heredoc cierra la BD en `finally` y sale 1 ante cualquier error | 🧪 1 e2e (el antiguo no salta en 40 s) |
+| `HJ_DB_PATH` del `.env`/entorno se ignoraba: se migraba `data/hj.db` aunque el bot usara otra base | Resolución en el MISMO orden que el bot (entorno > unidad systemd > .env > default); checkpoint/backup/migración/restauración sobre ESA ruta aunque sea externa a `data/` | 🧪 2 e2e + 1 estática |
+
+Los e2e (`tests/test_update_e2e.py`) ejecutan el `update.sh` REAL contra una
+instalación falsa pero fiel: `systemctl`/`journalctl`/`id`/`tar` simulados
+con registro de acciones, SQLite real con el esquema `0001`, `pip`
+simulado y migraciones inyectadas (99998 escribe y compromete + 99999 con
+SQL inválido) para reproducir el fallo parcial de `db.migrate()`.
 
 ### Pruebas 1-14 del encargo (integración con dispatcher REAL de aiogram)
 `tests/test_v3_flows.py`: **14/14 pasan**. Simulan updates de Telegram
