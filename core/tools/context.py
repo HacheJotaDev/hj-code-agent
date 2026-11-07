@@ -26,6 +26,7 @@ class AgentContext:
     steps: int = 0
     files_touched: list[str] = field(default_factory=list)
     commands_run: list[str] = field(default_factory=list)
+    command_results: list[tuple[str, str]] = field(default_factory=list)  # (cmd, salida REAL recortada)
     tests_run: list[str] = field(default_factory=list)
     notify: Callable[[str], Awaitable[None]] | None = None
     approvals: dict[str, Any] = field(default_factory=dict)  # canal de autorizaciones

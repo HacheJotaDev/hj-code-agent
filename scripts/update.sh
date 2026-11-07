@@ -42,9 +42,11 @@ LOCALMODS="$BACKUP_DIR/localmods"
 mkdir -p "$LOCALMODS"
 if command -v rsync >/dev/null; then
   # dry-run para detectar diferencias entre instalado y nuevo codigo
+  # ('*deleting' = archivos que la version nueva elimina: se anotan, no se
+  #  respaldan como modificaciones locales)
   CHANGED=$(rsync -rcn --delete --exclude '.git' --exclude '__pycache__' --exclude '.venv' \
         --exclude 'data' --exclude 'workspaces' --exclude 'backups' --exclude '.env' \
-        "$SRC_DIR"/ "$APP_DIR"/ 2>/dev/null | grep -v '/$' || true)
+        "$SRC_DIR"/ "$APP_DIR"/ 2>/dev/null | grep -v '/$' | grep -v '^\*deleting' || true)
   if [ -n "$CHANGED" ]; then
     echo "Archivos con cambios (se conservan copia en $LOCALMODS):"
     echo "$CHANGED" | head -20
@@ -73,7 +75,7 @@ ok "Servicio detenido (otros servicios intactos)"
 rollback() {
   echo -e "\n\033[1;31m!! FALLO: $1 — iniciando ROLLBACK\033[0m"
   rm -rf "$APP_DIR.new"
-  [ -d "$BACKUP_DIR/app-anterior.tar.gz" ] || true
+  [ -f "$BACKUP_DIR/app-anterior.tar.gz" ] || true
   # restaura el codigo anterior desde el tar (sin tocar .env ni data)
   tar -xzf "$BACKUP_DIR/app-anterior.tar.gz" -C "$BASE_DIR"
   "$BASE_DIR/venv/bin/pip" install -e "$BASE_DIR/app" --quiet || true
@@ -83,7 +85,9 @@ rollback() {
 }
 
 step "4/8 Copiando software nuevo"
-rsync -a --exclude '.git' --exclude '__pycache__' --exclude '.venv' \
+# --delete elimina archivos obsoletos de la version anterior (los excludes
+# protegen .env, data/, workspaces/ y backups/ de cualquier borrado).
+rsync -a --delete --exclude '.git' --exclude '__pycache__' --exclude '.venv' \
       --exclude 'data' --exclude 'workspaces' --exclude 'backups' --exclude '.env' \
       "$SRC_DIR"/ "$APP_DIR"/
 [ -f "$APP_DIR/.env" ] || cp -a "$BACKUP_DIR/.env" "$APP_DIR/.env" 2>/dev/null || true
@@ -91,12 +95,15 @@ ok "Codigo actualizado (.env, data/, workspaces/ y backups/ NO se tocan)"
 
 step "5/8 Dependencias + migraciones"
 "$BASE_DIR/venv/bin/pip" install -e "$APP_DIR" --quiet || rollback "pip install"
+HJ_APP_DIR="$APP_DIR" HJ_DATA_DB="$BASE_DIR/data/hj.db" \
 "$BASE_DIR/venv/bin/python" - <<'PYEOF' || rollback "migraciones"
-import asyncio, sys
-sys.path.insert(0, "/opt/hj-code-agent/app")
+import asyncio, os, sys
+app_dir = os.environ["HJ_APP_DIR"]
+db_path = os.environ["HJ_DATA_DB"]
+sys.path.insert(0, app_dir)
 from core.storage.database import Database
 async def main():
-    db = Database("/opt/hj-code-agent/data/hj.db")
+    db = Database(db_path)
     await db.connect()
     applied = await db.migrate()
     print(f"Migraciones aplicadas: {applied}")

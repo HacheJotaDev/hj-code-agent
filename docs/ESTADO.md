@@ -54,6 +54,46 @@ Leyenda: ✅ implementado · 🧪 implementado + prueba automatizada · ⏳ pend
 - ⏳ Webhooks de GitHub (hoy: pull manual y /history).
 - ⏳ /system project con múltiples prompts por proyecto guardados (hoy: 1).
 
+## Resultados de la suite V3 (noviembre 2026)
+
+**146 pruebas automatizadas: 145 pasan, 0 fallan, 1 omitida.**
+La omitida es `tests/test_sandbox_docker.py` (requiere un daemon Docker real;
+este entorno de CI no lo tiene — se valida en el VPS).
+
+### Pruebas 1-14 del encargo (integración con dispatcher REAL de aiogram)
+`tests/test_v3_flows.py`: **14/14 pasan**. Simulan updates de Telegram
+completos (mensaje, documento, callback) que atraviesan middlewares,
+routers y servicios reales; los mocks son solo de red (Telegram HTTP y LLM).
+
+| # | Flujo | Estado |
+|---|---|---|
+| 1 | Primera ejecución: /start responde con menú V3, HTML válido | 🧪 |
+| 2 | Proveedor/modelo seleccionables, respuesta real del LLM, preferencia persistida | 🧪 (LLM simulado) |
+| 3 | Chat sin proyecto: responde y NO crea proyectos | 🧪 |
+| 4 | /newproject crea y selecciona el proyecto | 🧪 |
+| 5 | /projects con 0, 1 y varios proyectos | 🧪 |
+| 6 | ZIP recibido SIN GitHub: workspace creado, raíz única aplanada, resumen con puntos de entrada | 🧪 |
+| 7 | Petición en lenguaje natural → tarea con herramientas → archivo REAL creado | 🧪 |
+| 8 | run_tests en sandbox: salida REAL de pytest incluida como evidencia en el resumen | 🧪 (sandbox local; Docker en VPS) |
+| 9 | /export devuelve el ZIP del proyecto | 🧪 |
+| 10 | GitHub opcional: todo funciona sin token; push exige autorización | 🧪 |
+| 11 | HTML de Telegram siempre válido (`<tarea>`, código, rutas escapados) | 🧪 |
+| 12 | ID no autorizado: sin acceso, aviso único, cero creación de datos | 🧪 |
+| 13 | Persistencia tras reinicio: proyectos, conversaciones y mensajes en nueva conexión | 🧪 |
+| 14 | Migraciones idempotentes + update.sh con backup/rollback | 🧪 (sintaxis y lógica; systemd real en VPS) |
+
+### Verificado realmente (este entorno)
+- Todo lo anterior, con el motor de intenciones, deduplicación de updates,
+  cola, sandbox local (rlimits), vault, migraciones y GitHub broker reales.
+
+### Requiere validación en el VPS (no ejecutable aquí)
+- Docker rootless: flags del contenedor probados unitariamente, pero la
+  creación real de contenedores necesita Docker (test omitido a propósito).
+- DeepSeek en vivo: /testapi, /balance, listado real de modelos
+  (`deepseek-flash`, `deepseek-v4-pro` si existen) — los tests usan mocks HTTP.
+- systemd real: arranque, "Bot en marcha", rollback del update.sh.
+- Renderizado real de mensajes >4096 caracteres y rate limits de Telegram.
+
 ## Modelos iniciales
 El encargo nombra `deepseek-flash` y `deepseek-v4-pro`. El producto NO asume
 esa lista: `/models` consulta siempre `GET /models` del proveedor y rechaza

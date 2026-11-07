@@ -93,31 +93,25 @@ async def free_chat(message: Message, ctx):
             "2) Configúrala de forma segura con <code>/setapi</code> (formulario de un solo uso).")
         return
 
-    # 2) Ruta V3: con proyecto activo e intencion de codigo -> tarea del agente
+    # 2) Ruta V3: intencion de codigo -> tarea del agente (auto-crea proyecto)
     from ..intent import looks_like_code_task, is_ambiguous
     proj = await ctx.projects.active(uid)
     if looks_like_code_task(text):
-        if proj:
+        if proj or not is_ambiguous(text):
+            # Con proyecto activo, o peticion CLARA sin proyecto: submit_task
+            # crea/selecciona el proyecto automaticamente (flujo V3: sin /run,
+            # sin pasos previos, sin GitHub).
             from .agent_cmds import submit_task
             await submit_task(message, ctx, text)
             return
-        rows = await ctx.projects.list(uid)
-        if rows and not is_ambiguous(text):
-            from .agent_cmds import submit_task
-            await submit_task(message, ctx, text)  # usa el proyecto mas reciente
-            return
-        if is_ambiguous(text):
-            from ..keyboards import chat_or_task_kb
-            token = ctx.store.new_token()[:12]
-            await ctx.store.kv_set(f"choice:{token}", text[:1000], ttl_s=600)
-            await message.answer(
-                "🤔 ¿Quieres que trabaje en el proyecto o es solo una pregunta?",
-                reply_markup=chat_or_task_kb(token))
-            return
-        # sin proyectos: chat normal con sugerencia
+        # Peticion ambigua sin proyecto: eleccion simple con botones
+        from ..keyboards import chat_or_task_kb
+        token = ctx.store.new_token()[:12]
+        await ctx.store.kv_set(f"choice:{token}", text[:1000], ttl_s=600)
         await message.answer(
-            "💡 Aún no tienes proyectos. Envía un ZIP o escribe /newproject Nombre, "
-            "y trabajo en tu código. Mientras tanto te respondo como chat:")
+            "🤔 ¿Quieres que trabaje en un proyecto o es solo una pregunta?",
+            reply_markup=chat_or_task_kb(token))
+        return
 
     await run_plain_chat(message, ctx, uid, text)
 
@@ -126,6 +120,10 @@ async def run_plain_chat(message: Message, ctx, uid: int, text: str):
     conv = await ensure_conversation(ctx, uid)
     pname = await ctx.providers.active_name(uid)
     model = await ctx.store.get_pref(uid, f"model:{pname}")
+    # Persistencia V3: el mensaje del usuario se guarda SIEMPRE (sobrevive a
+    # reinicios y a fallos de proveedor; prueba 13).
+    await ctx.store.add_message(conv["id"], "user", text)
+    await ctx.store.touch_conversation(conv["id"], provider=pname, model=model)
     if not model:
         await message.answer("🧠 Primero elige un modelo: /models y /model select &lt;nombre&gt;")
         return
@@ -139,8 +137,6 @@ async def run_plain_chat(message: Message, ctx, uid: int, text: str):
     proj = await ctx.projects.active(uid)
     messages = await ctx.prompts.build_messages(uid, rows_to_api(history), proj)
     messages.append({"role": "user", "content": text})
-    await ctx.store.add_message(conv["id"], "user", text)
-    await ctx.store.touch_conversation(conv["id"], provider=pname, model=model)
     typing_msg = await message.answer("✍️")
     use_stream = (await ctx.store.get_pref(uid, "stream")) == "1"
     try:

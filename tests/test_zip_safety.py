@@ -100,3 +100,38 @@ def test_create_zip_excluye_git(tmp_path):
     with zipfile.ZipFile(out) as z:
         names = z.namelist()
     assert "ok.py" in names and not any(n.startswith(".git") for n in names)
+
+
+# ------------------- aplanado de raiz unica (flujo V3) ----------------------
+
+
+def test_zip_raiz_unica_se_aplana(tmp_path):
+    """Un ZIP con carpeta envolvente unica (demo/) extrae aplanado."""
+    src = _write_zip(tmp_path, {"demo/main.py": "print('hola')\n",
+                                "demo/pkg/util.py": "x = 1\n",
+                                "demo/README.md": "# demo\n"})
+    dest = tmp_path / "ws"
+    stats = extract_archive(src, dest, max_files=100, max_unpacked_mb=10)
+    assert stats["flattened_root"] == "demo"
+    assert (dest / "main.py").exists()
+    assert (dest / "pkg" / "util.py").exists()
+    assert not (dest / "demo").exists()
+
+
+def test_zip_multi_raiz_no_se_aplana(tmp_path):
+    """Varios directorios de primer nivel: se respeta la estructura."""
+    src = _write_zip(tmp_path, {"app/main.py": "x\n", "docs/readme.md": "y\n"})
+    dest = tmp_path / "ws2"
+    stats = extract_archive(src, dest, max_files=100, max_unpacked_mb=10)
+    assert stats["flattened_root"] is None
+    assert (dest / "app" / "main.py").exists()
+    assert (dest / "docs" / "readme.md").exists()
+
+
+def test_zip_traversal_oculto_tras_raiz_bloqueado(tmp_path):
+    """Un '../' disfrazado tras la raiz comun NO evade la validacion."""
+    src = _write_zip(tmp_path, {"demo/../../malo.py": "pwn\n"})
+    dest = tmp_path / "ws3"
+    with pytest.raises(ZipUnsafe):
+        extract_archive(src, dest, max_files=100, max_unpacked_mb=10)
+    assert not (tmp_path / "malo.py").exists()

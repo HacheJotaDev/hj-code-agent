@@ -66,12 +66,44 @@ def inspect_zip(zip_path: Path, *, max_files: int, max_unpacked_mb: int) -> dict
     return {"files": n_files, "unpacked_bytes": total, "ratio": round(ratio, 1)}
 
 
-def extract_zip(zip_path: Path, dest: Path, *, max_files: int, max_unpacked_mb: int) -> dict:
+def _common_root(names: list[str]) -> str | None:
+    """Raiz comun (p. ej. 'demo') si TODAS las entradas cuelgan de ella.
+
+    Un ZIP exportado desde GitHub/Windows suele envolver el proyecto en una
+    carpeta unica; al aplanarla el workspace queda como un git clone.
+    """
+    root: str | None = None
+    for n in names:
+        parts = n.replace("\\", "/").split("/")
+        if not parts or parts[0] in ("", "."):
+            return None
+        if root is None:
+            root = parts[0]
+        elif parts[0] != root:
+            return None
+    return root
+
+
+def extract_zip(zip_path: Path, dest: Path, *, max_files: int, max_unpacked_mb: int,
+                flatten_root: bool = True) -> dict:
     dest.mkdir(parents=True, exist_ok=True)
     stats = inspect_zip(zip_path, max_files=max_files, max_unpacked_mb=max_unpacked_mb)
     with zipfile.ZipFile(zip_path) as z:
+        names = [i.filename for i in z.infolist()]
+        root = _common_root(names) if flatten_root else None
+        prefix = f"{root}/" if root else ""
         for info in z.infolist():
-            target = _safe_dest(dest, info.filename)
+            rel = info.filename
+            if prefix:
+                if rel.replace("\\", "/") == root.rstrip("/"):
+                    continue  # entrada de solo la carpeta raiz
+                if not rel.replace("\\", "/").startswith(prefix):
+                    rel, prefix = info.filename, ""  # seguridad: no deberia ocurrir
+                else:
+                    rel = rel.replace("\\", "/")[len(prefix):]
+            # validacion SIEMPRE sobre el nombre ya aplanado (un '../' oculto
+            # tras la raiz se detecta igual)
+            target = _safe_dest(dest, rel)
             if info.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
@@ -79,6 +111,7 @@ def extract_zip(zip_path: Path, dest: Path, *, max_files: int, max_unpacked_mb: 
             with z.open(info) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
             os.chmod(target, 0o600)
+    stats["flattened_root"] = root
     return stats
 
 
@@ -103,10 +136,12 @@ def extract_tar(tar_path: Path, dest: Path, *, max_files: int, max_unpacked_mb: 
     return {"files": n_files, "unpacked_bytes": total, "ratio": 0.0}
 
 
-def extract_archive(path: Path, dest: Path, *, max_files: int, max_unpacked_mb: int) -> dict:
+def extract_archive(path: Path, dest: Path, *, max_files: int, max_unpacked_mb: int,
+                    flatten_root: bool = True) -> dict:
     name = path.name.lower()
     if name.endswith(".zip"):
-        return extract_zip(path, dest, max_files=max_files, max_unpacked_mb=max_unpacked_mb)
+        return extract_zip(path, dest, max_files=max_files, max_unpacked_mb=max_unpacked_mb,
+                           flatten_root=flatten_root)
     if name.endswith((".tar.gz", ".tgz", ".tar")):
         return extract_tar(path, dest, max_files=max_files, max_unpacked_mb=max_unpacked_mb)
     raise ZipUnsafe("Formato de archivo no soportado (usa .zip, .tar.gz o .tar)")

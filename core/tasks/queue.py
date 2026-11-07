@@ -12,6 +12,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from html import escape as html_esc
 
 from security.path_guard import PathGuard
 from ..agent.engine import TaskOutcome
@@ -121,7 +122,9 @@ class TaskQueue:
 
         async def notify(text: str) -> None:
             try:
-                await self.s.bot.send_message(chat_id, text[:4000])
+                # parse_mode HTML global: el texto plano (rutas, salidas de
+                # comandos, nombres con <>) SIEMPRE se escapa (prueba 11).
+                await self.s.bot.send_message(chat_id, html_esc(text)[:4000])
             except Exception:
                 log.warning("No se pudo notificar al chat %s", chat_id)
 
@@ -157,7 +160,7 @@ class TaskQueue:
             await self.s.store.update_task(
                 tid, status="failed", error=str(e)[:900],
                 finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-            await notify(f"❌ Tarea #{tid} fallo: {e}")
+            await notify(f"❌ Tarea #{tid} fallo: {html_esc(str(e))[:800]}")
         finally:
             self._running.pop(tid, None)
             self._user_busy.pop(uid, None)
@@ -180,7 +183,7 @@ class TaskQueue:
         b = await self.s.store.get_budget(task["user_id"])
         if b.get("notifications", 1):
             try:
-                await self.s.bot.send_message(task["chat_id"], summary[:4000])
+                await self.s.bot.send_message(task["chat_id"], html_esc(summary)[:4000])
             except Exception:
                 pass
         # Entrega del ZIP del proyecto si el agente lo genero (flujo V3)
@@ -210,6 +213,13 @@ class TaskQueue:
             lines.append("Archivos tocados: " + ", ".join(outcome.files_touched[:12]))
         if outcome.commands:
             lines.append(f"Comandos ejecutados: {len(outcome.commands)}")
+        # Evidencia real de ejecucion: salida capturada del sandbox.
+        if getattr(ctx, "command_results", None):
+            lines.append("")
+            lines.append("🔍 Evidencia de ejecución (salida real del sandbox):")
+            for cmd, out in ctx.command_results[-3:]:
+                lines.append(f"$ {cmd}")
+                lines.append(out[:900])
         lines.append("")
         lines.append(outcome.summary or "(sin resumen)")
         return "\n".join(lines)

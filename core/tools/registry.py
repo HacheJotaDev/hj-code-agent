@@ -394,8 +394,12 @@ async def tool_execute_command(ctx: AgentContext, args: dict) -> str:
     try:
         res = await ctx.sandbox.exec(cmd, timeout=timeout, key=f"t{ctx.task_id}:{len(ctx.commands_run)}",
                                      task_id=ctx.task_id)
+        # Evidencia real: la salida del sandbox viaja al resumen de la tarea
+        # (nada de inventar resultados: lo que se muestra es lo que ejecutó).
+        ctx.command_results.append((cmd[:200], res.truncated(1200)))
         return _ok(res.truncated(6000))
     except CommandDenied as e:
+        ctx.command_results.append((cmd[:200], f"DENEGADO: {e}"))
         return _err(str(e))
 
 
