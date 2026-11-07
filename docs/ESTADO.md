@@ -130,3 +130,50 @@ El encargo nombra `deepseek-flash` y `deepseek-v4-pro`. El producto NO asume
 esa lista: `/models` consulta siempre `GET /models` del proveedor y rechaza
 nombres inexistentes avisándolo. Si DeepSeek publica esos ids, aparecerán
 automáticamente en el catálogo.
+
+---
+
+# V4 — Panel Web (rama `feature/hachecode-web-v4`, noviembre 2026)
+
+Migración de interfaz Telegram → Web **reutilizando el motor V3**. Ver
+`docs/WEB_V4.md`, `docs/DEPLOY_VERCEL.md`, `docs/DEPLOY_BACKEND_VPS.md`,
+`docs/MIGRACION_V4.md`.
+
+## Implementado y probado
+| Función | Estado | Dónde |
+|---|---|---|
+| Backend FastAPI con auth (scrypt, sesiones server-side, CSRF, rate-limit) | 🧪 | `backend/`, `tests/test_web_auth.py` |
+| Proyectos: CRUD, árbol, archivos (leer/escribir/borrar/descargar) con PathGuard | 🧪 | `backend/routers/projects.py`, `tests/test_web_projects.py` |
+| Import/export ZIP seguros (flatten raíz, zip-slip rechazado, rollback de import fallido) | 🧪 | `tests/test_web_projects.py` |
+| Chat: conversaciones, mensajes, historial persistido | 🧪 | `backend/routers/chat.py`, `tests/test_web_chat.py` |
+| Tareas: envío → cola web → motor real → estado final | 🧪 | `backend/queue_web.py`, `tests/test_web_chat.py` |
+| Plan de trabajo visual declarado por el MODELO (`update_plan`); límite de pasos NO finge completitud (`plan_incomplete`) | 🧪 | `core/tools/registry.py`, `tests/test_web_chat.py` |
+| Actividad en vivo: eventos por herramienta persistidos + SSE con replay (`Last-Event-ID`) y heartbeat | 🧪 | `backend/events.py`, `backend/routers/chat.py`, `tests/test_web_chat.py` |
+| Cancelación (en cola y en marcha) y reintento/continuación desde estado real | 🧪 | `tests/test_web_chat.py` |
+| Recuperación tras reinicio: tareas `running` → `interrupted` (reintentables) | 🧪 | `tests/test_web_chat.py` |
+| Selector de modelos con catálogo REAL del proveedor (nada inventado) | 🧪 | `backend/routers/models.py` |
+| Git: status/log/diff/ramas/stage/commit; push en DOS pasos con token efímero de un solo uso | 🧪 | `backend/routers/gitops.py`, `tests/test_web_git_exec.py` |
+| Ejecución sandbox a demanda: command_guard + fail-safe sin rootless | 🧪 | `backend/routers/execrun.py`, `tests/test_web_git_exec.py` |
+| Consumo/costes reales y presupuestos | 🧪 | `backend/routers/usage.py` |
+| Frontend Next.js 15 (App Router, TS, Tailwind 4, Monaco, tema claro/oscuro, móvil-first con drawer/overlay) — **`next build` compila** | 🧪 | `frontend/` |
+| Proxy `/api/*` (rewrite) probado end-to-end con `next start` | ✅ | `scripts/smoke_web.sh` |
+| Bug latente V3 corregido: `_run_git` no esperaba el proceso → proyectos sin git init/config | 🧪 | `core/projects/manager.py` |
+| Bug real de defaults corregido: sin `active_provider` la web caía en `anthropic` (primer proveedor alfabético) | 🧪 | `backend/app.py` |
+
+## Smoke E2E real (`scripts/smoke_web.sh`)
+Backend uvicorn + `next start`: health OK, login con cookie+CSRF, proyecto y
+archivos reales, path traversal → 400, `python3 main.py` ejecutado en sandbox
+(`42`), login y API a través del proxy de Next.js → todo verificado.
+
+## Requiere validación en el VPS (no ejecutable aquí)
+- ⏳ Docker rootless real para sandboxes de la web (mismas garantías V3; flags probados unitariamente).
+- ⏳ DeepSeek en vivo con la API key real (catálogo, chat, costes).
+- ⏳ Despliegue Vercel + dominio/TLS (docs listas; no se despliega desde aquí).
+- ⏳ Experiencia táctil real en Android (layout probado por CSS; sin dispositivo aquí).
+- ⏳ Carga concurrente de varios navegadores (diseño mono-usuario).
+
+## Resultados de la suite con V4 (noviembre 2026)
+**199 pruebas automatizadas: 199 pasan, 0 fallan, 1 omitida** (Docker real,
+se valida en el VPS). Incluye 53 pruebas web nuevas; la suite V3 completa
+(14 flujos incluidos) sigue en verde: la interfaz Telegram no se tocó.
+

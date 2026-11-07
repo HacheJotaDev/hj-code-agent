@@ -184,6 +184,11 @@ class AgentEngine:
                                                         result[:200], ok=json_ok(result)))
                         logs.append(f"[{time.strftime('%H:%M:%S')}] {tc.name} "
                                     f"-> {result[:160]}")
+                        if ctx.emit:
+                            # V4 Web: actividad en vivo (aditivo; Telegram no emite)
+                            await ctx.emit({"type": "tool", "step": ctx.steps,
+                                            "name": tc.name, "ok": json_ok(result),
+                                            "summary": result[:2000]})
                         messages.append({"role": "tool", "tool_call_id": tc.id,
                                          "content": result})
                         if save_history:
@@ -205,6 +210,10 @@ class AgentEngine:
             else:
                 outcome.summary = ("Se alcanzo el limite de pasos sin respuesta final. "
                                    "Puedes reintentar con /task retry o subir el limite.")
+                if ctx.emit and any(p["status"] in ("pending", "in_progress") for p in ctx.plan):
+                    await ctx.emit({"type": "plan_incomplete",
+                                    "note": "L\u00edmite de pasos alcanzado con pasos pendientes: "
+                                            "no se marcan como completados."})
         except TaskCancelled:
             outcome.cancelled = True
             outcome.summary = "Tarea cancelada por el usuario."

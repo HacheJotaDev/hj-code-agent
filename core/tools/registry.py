@@ -23,7 +23,10 @@ TOOL_NAMES = [
     "search_code", "create_directory", "move_file", "delete_file", "execute_command",
     "install_dependencies", "run_tests", "run_build", "git_status", "git_diff", "git_branch",
     "git_commit", "git_push", "github_pull_request", "get_task_logs", "export_zip",
+    "update_plan",
 ]
+
+PLAN_STATUSES = ("pending", "in_progress", "done", "failed", "partial")
 
 _S = {"type": "object", "properties": {}, "required": []}
 
@@ -96,6 +99,11 @@ TOOL_SCHEMAS: list[dict] = [
     _schema("get_task_logs", "Devuelve el registro de pasos de la tarea actual.",
             {"task_id": {"type": "integer", "description": "opcional; por defecto la tarea en curso"}}),
     _schema("export_zip", "Empaqueta el proyecto completo (sin .git/node_modules) en un ZIP y se lo entrega al usuario al terminar la tarea. Úsalo cuando el usuario pida el proyecto final o devolver los cambios.", {}),
+    _schema("update_plan", "Declara o actualiza el plan de trabajo VISIBLE para el usuario. Úsalo al empezar una tarea de varios pasos y cada vez que un paso cambia de estado. Estados: pending (pendiente), in_progress (en ejecución), done (completado), failed (fallido), partial (parcialmente completado). NUNCA marques 'done' un paso que no terminó realmente.",
+            {"steps": {"type": "array", "items": {"type": "object", "properties": {
+                "title": {"type": "string", "description": "descripción corta del paso"},
+                "status": {"type": "string", "enum": list(PLAN_STATUSES)}},
+                "required": ["title", "status"]}}}, ["steps"]),
 ]
 
 # --------------------------- utilidades --------------------------------
@@ -548,6 +556,32 @@ async def tool_export_zip(ctx: AgentContext, args: dict) -> str:
     return _ok(f"ZIP creado: {out.name} ({out.stat().st_size} bytes). Se entregara al finalizar.")
 
 
+# --------------------------- plan de trabajo (V4) -----------------------
+
+
+async def tool_update_plan(ctx: AgentContext, args: dict) -> str:
+    steps = args.get("steps")
+    if not isinstance(steps, list) or not steps or len(steps) > 30:
+        return _err("'steps' debe ser una lista de 1 a 30 pasos")
+    plan: list[dict] = []
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            return _err(f"Paso {i + 1}: debe ser un objeto")
+        title = str(s.get("title", "")).strip()[:200]
+        status = str(s.get("status", "pending")).strip().lower()
+        if not title:
+            return _err(f"Paso {i + 1}: falta 'title'")
+        if status not in PLAN_STATUSES:
+            return _err(f"Paso {i + 1}: estado invalido '{status}' "
+                        f"(usa: {', '.join(PLAN_STATUSES)})")
+        plan.append({"title": title, "status": status})
+    ctx.plan = plan
+    if ctx.emit:
+        await ctx.emit({"type": "plan", "plan": plan})
+    done = sum(1 for p in plan if p["status"] == "done")
+    return _ok(f"Plan actualizado: {len(plan)} pasos ({done} completados)")
+
+
 # --------------------------- despachador -------------------------------
 
 TOOL_FUNCS = {
@@ -571,6 +605,7 @@ TOOL_FUNCS = {
     "git_commit": tool_git_commit,
     "get_task_logs": tool_get_task_logs,
     "export_zip": tool_export_zip,
+    "update_plan": tool_update_plan,
 }
 
 

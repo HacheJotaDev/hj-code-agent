@@ -149,6 +149,11 @@ class ProjectManager:
 
 async def _run_git(cwd: Path, args: list[str]):
     import asyncio
-    return await asyncio.create_subprocess_exec(
+    proc = await asyncio.create_subprocess_exec(
         "git", *args, cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    # CRITICO: esperar el proceso; sin esto returncode es None y el llamador
+    # (create) nunca aplica config ni git_state (bug latente de la V3,
+    # destapado por las pruebas del panel web V4).
+    await proc.communicate()
+    return proc

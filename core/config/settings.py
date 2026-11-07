@@ -85,6 +85,22 @@ class Settings(BaseSettings):
     form_port: int = Field(default=8977, validation_alias="HJ_FORM_PORT")
     form_base_url: str = Field(default="", validation_alias="HJ_FORM_BASE_URL")
 
+    # ---- V4 Web (panel web; Telegram sigue funcionando en paralelo) ----
+    web_host: str = Field(default="127.0.0.1", validation_alias="HJ_WEB_HOST")
+    web_port: int = Field(default=8900, validation_alias="HJ_WEB_PORT")
+    # Origen del frontend desplegado (Vercel) para CORS; sin proxy no se permite nada.
+    frontend_origin: str = Field(default="", validation_alias="FRONTEND_ORIGIN")
+    # Usuario web de arranque (solo se crea si la tabla web_users esta vacia).
+    web_username: str = Field(default="admin", validation_alias="HJ_WEB_USERNAME")
+    web_password: str = Field(default="", validation_alias="HJ_WEB_PASSWORD")
+    # UID de HJ (usuario de Telegram existente) con el que trabaja el motor.
+    web_agent_uid: int = Field(default=0, validation_alias="HJ_WEB_AGENT_UID")
+    web_session_ttl_h: int = Field(default=72, validation_alias="HJ_WEB_SESSION_TTL_H")
+    # None = automatico (Secure salvo localhost); true/false fuerza.
+    web_secure_cookies: Optional[bool] = Field(default=None, validation_alias="HJ_WEB_SECURE_COOKIES")
+    web_default_model: str = Field(default="deepseek-chat", validation_alias="HJ_WEB_DEFAULT_MODEL")
+    web_rate_limit_per_min: int = Field(default=240, validation_alias="HJ_WEB_RATE_LIMIT_PER_MIN")
+
     @field_validator("admin_user_ids", mode="before")
     @classmethod
     def _parse_ids(cls, v):

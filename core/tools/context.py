@@ -31,6 +31,10 @@ class AgentContext:
     notify: Callable[[str], Awaitable[None]] | None = None
     approvals: dict[str, Any] = field(default_factory=dict)  # canal de autorizaciones
     exported_zip: str | None = None  # ruta del ZIP entregable (flujo V3)
+    # V4 Web (aditivo, Telegram no lo usa): emisor de eventos en vivo y plan
+    # declarado por el propio modelo via update_plan (nunca inventado por la UI).
+    emit: Callable[[dict], Awaitable[None]] | None = None
+    plan: list[dict] = field(default_factory=list)
 
     def touch(self, relpath: str) -> None:
         if relpath not in self.files_touched:
